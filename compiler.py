@@ -2,8 +2,10 @@
 
 DSL (top-level forms):
 
-    (let-dim <name> <dim> ...)       bind name/dim pairs at compile time;
-                                     later pairs may reference earlier ones
+    (let-dim (<name> <dim>) ...)     bind dims at compile time; later
+                                     bindings may reference earlier ones.
+                                     Flat pairs also work:
+                                     (let-dim <name> <dim> ...)
     (define <name> <block>)
 
 A block position also accepts the name of an earlier define, compiling to
@@ -98,11 +100,7 @@ def compile_source(source):
     for form in parse(source):
         match form:
             case ["let-dim", *bindings] if bindings:
-                if len(bindings) % 2:
-                    raise CompileError(
-                        f"let-dim expects name/dim pairs, got {form!r}"
-                    )
-                for name, value in zip(bindings[::2], bindings[1::2]):
+                for name, value in _let_dim_pairs(bindings, form):
                     if not (isinstance(name, str) and name.isidentifier()):
                         raise CompileError(
                             f"let-dim name must be a symbol, got {name!r}"
@@ -143,6 +141,29 @@ def {name}(params, x):
             parts.append(HELPERS[helper])
     parts.extend(defs)
     return "\n".join(parts)
+
+
+def _let_dim_pairs(bindings, form):
+    """Normalize let-dim bindings to (name, value) pairs.
+
+    Grouped form (let-dim (d 128) (heads 8)) when the first binding is a
+    list — the flat form always starts with a name symbol; flat pairs
+    (let-dim d 128 heads 8) otherwise.
+    """
+    if isinstance(bindings[0], list):
+        pairs = []
+        for binding in bindings:
+            match binding:
+                case [name, value]:
+                    pairs.append((name, value))
+                case _:
+                    raise CompileError(
+                        f"let-dim binding must be (<name> <dim>), got {binding!r}"
+                    )
+        return pairs
+    if len(bindings) % 2:
+        raise CompileError(f"let-dim expects name/dim pairs, got {form!r}")
+    return list(zip(bindings[::2], bindings[1::2]))
 
 
 def _resolve_dim(form, dim_env):

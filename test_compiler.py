@@ -210,6 +210,26 @@ def test_let_dim_multiple_pairs():
     assert "jnp.ones(64), jnp.zeros(64)" in out
 
 
+def test_let_dim_grouped_bindings():
+    src = """
+    (let-dim
+      (d 16) (heads 4) (ffn (* 4 d)))
+    (define m (layernorm ffn))
+    """
+    out = compile_source(src)
+    assert "jnp.ones(64), jnp.zeros(64)" in out
+
+
+def test_let_dim_grouped_binding_wrong_shape_raises():
+    with pytest.raises(CompileError, match=r"binding must be \(<name> <dim>\)"):
+        compile_source("(let-dim (d 16 4)) (define m (layernorm d))")
+
+
+def test_let_dim_grouped_non_symbol_name_raises():
+    with pytest.raises(CompileError, match="name must be a symbol"):
+        compile_source("(let-dim (4 16)) (define m (layernorm 4))")
+
+
 def test_let_dim_odd_binding_count_raises():
     with pytest.raises(CompileError, match="name/dim pairs"):
         compile_source("(let-dim d 16 heads) (define m (layernorm d))")
