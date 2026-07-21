@@ -441,7 +441,7 @@ def {name}(params, x):
 
 def main():
     if len(sys.argv) not in (2, 3):
-        print("usage: python compiler.py model.lisp [out.py]", file=sys.stderr)
+        print("usage: python compiler.py model.jisp [out.py]", file=sys.stderr)
         sys.exit(2)
     in_path = sys.argv[1]
     out_path = sys.argv[2] if len(sys.argv) == 3 else str(Path(in_path).with_suffix(".py"))

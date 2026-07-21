@@ -11,7 +11,7 @@ jisp is three small pieces, each built on the last:
    The compiler evaluates dimension expressions with the interpreter from step 2.
 
 ```lisp
-; examples/transformer.lisp
+; examples/transformer.jisp
 (let-dim
   (d 128) (heads 8) (layers 4))
 
@@ -22,7 +22,7 @@ jisp is three small pieces, each built on the last:
 ```
 
 ```console
-$ python compiler.py examples/transformer.lisp
+$ python compiler.py examples/transformer.jisp
 wrote examples/transformer.py
 ```
 
@@ -99,7 +99,7 @@ before any Python runs.
 The interpreter that powers dim expressions also stands alone:
 
 ```console
-$ python jisp.py program.lisp
+$ python jisp.py program.jisp
 ```
 
 ```lisp

@@ -138,7 +138,7 @@ def exec(forms, env=None):
 
 def main():
     if len(sys.argv) != 2:
-        print("usage: python jisp.py file.lisp", file=sys.stderr)
+        print("usage: python jisp.py file.jisp", file=sys.stderr)
         sys.exit(2)
     with open(sys.argv[1]) as f:
         source = f.read()

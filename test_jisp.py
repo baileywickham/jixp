@@ -198,7 +198,7 @@ def run_cli(*argv):
 
 
 def test_cli_evaluates_file(tmp_path):
-    src = tmp_path / "prog.lisp"
+    src = tmp_path / "prog.jisp"
     src.write_text("(define x 3)\n(+ x 4)\n(quote (a b))\n")
     result = run_cli(str(src))
     assert result.returncode == 0
@@ -206,7 +206,7 @@ def test_cli_evaluates_file(tmp_path):
 
 
 def test_cli_eval_error_goes_to_stderr(tmp_path):
-    src = tmp_path / "bad.lisp"
+    src = tmp_path / "bad.jisp"
     src.write_text("(boom 1)")
     result = run_cli(str(src))
     assert result.returncode == 1
@@ -214,7 +214,7 @@ def test_cli_eval_error_goes_to_stderr(tmp_path):
 
 
 def test_cli_parse_error_goes_to_stderr(tmp_path):
-    src = tmp_path / "bad.lisp"
+    src = tmp_path / "bad.jisp"
     src.write_text("(a (b)")
     result = run_cli(str(src))
     assert result.returncode == 1

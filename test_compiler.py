@@ -417,7 +417,7 @@ def run_compiler(*argv):
 
 
 def test_cli_writes_python_file_next_to_input(tmp_path):
-    src = tmp_path / "model.lisp"
+    src = tmp_path / "model.jisp"
     src.write_text("(define model (mlp 4 [8] 2))")
     result = run_compiler(str(src))
     out = tmp_path / "model.py"
@@ -427,7 +427,7 @@ def test_cli_writes_python_file_next_to_input(tmp_path):
 
 
 def test_cli_explicit_output_path(tmp_path):
-    src = tmp_path / "model.lisp"
+    src = tmp_path / "model.jisp"
     src.write_text("(define model (layernorm 4))")
     out = tmp_path / "custom.py"
     result = run_compiler(str(src), str(out))
@@ -436,7 +436,7 @@ def test_cli_explicit_output_path(tmp_path):
 
 
 def test_cli_compile_error_goes_to_stderr(tmp_path):
-    src = tmp_path / "bad.lisp"
+    src = tmp_path / "bad.jisp"
     src.write_text("(define m (conv 3))")
     result = run_compiler(str(src))
     assert result.returncode == 1
