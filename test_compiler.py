@@ -44,6 +44,27 @@ def test_chain_emits_sublayers_and_threads_x():
     compile(out, "<generated>", "exec")
 
 
+def test_mlp_defaults_to_gelu():
+    out = compile_source(MLP_SRC)
+    assert "jax.nn.gelu(x @ W + b)" in out
+    assert "relu" not in out
+
+
+def test_mlp_explicit_activation():
+    out = compile_source("(define m (mlp 8 [16] 4 relu))")
+    assert "jax.nn.relu(x @ W + b)" in out
+
+
+def test_mlp_tanh_uses_jnp():
+    out = compile_source("(define m (mlp 8 [16] 4 tanh))")
+    assert "jnp.tanh(x @ W + b)" in out
+
+
+def test_mlp_unknown_activation_raises():
+    with pytest.raises(CompileError, match="unknown activation 'elu'"):
+        compile_source("(define m (mlp 8 [16] 4 elu))")
+
+
 def test_chain_dimension_mismatch_raises():
     with pytest.raises(CompileError, match="mismatch"):
         compile_source("(define m (chain (mlp 8 [] 4) (layernorm 5)))")

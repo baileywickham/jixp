@@ -6,7 +6,11 @@ DSL (top-level forms):
     (define <name> <block>)
 
 Blocks:
-    (mlp <in> [<hidden>...] <out>)   dense layers with relu between them
+    (mlp <in> [<hidden>...] <out> <activation>?)
+                                     dense layers; <activation> is an optional
+                                     symbol (relu gelu silu sigmoid tanh),
+                                     default gelu, applied after each hidden
+                                     layer (never after the output layer)
     (layernorm <dim>)
     (attention <dim> <heads>)        multi-head self-attention over (..., seq, dim)
     (chain <block> <block>...)       sequential composition
@@ -56,6 +60,15 @@ def merge_heads(x):
     *batch, seq, heads, head_dim = x.shape
     return x.reshape(*batch, seq, heads * head_dim)
 ''',
+}
+
+
+ACTIVATIONS = {
+    "relu": "jax.nn.relu",
+    "gelu": "jax.nn.gelu",
+    "silu": "jax.nn.silu",
+    "sigmoid": "jax.nn.sigmoid",
+    "tanh": "jnp.tanh",
 }
 
 
@@ -122,7 +135,7 @@ def _compile_block(name, block, dim_env):
     """Compile one block; return (defs, in_dim, out_dim, helpers)."""
     match block:
         case ["mlp", *args]:
-            return _compile_mlp(name, _mlp_dims(args, dim_env))
+            return _compile_mlp(name, *_mlp_spec(args, dim_env))
         case ["layernorm", dim]:
             return _compile_layernorm(name, _resolve_dim(dim, dim_env))
         case ["attention", dim_form, heads_form]:
@@ -141,21 +154,33 @@ def _compile_block(name, block, dim_env):
             raise CompileError(f"unknown block: {block!r}")
 
 
-def _mlp_dims(args, dim_env):
+def _mlp_spec(args, dim_env):
+    activation = "gelu"
     match args:
         case [in_dim, tuple() as hidden, out_dim]:
-            return [_resolve_dim(d, dim_env) for d in (in_dim, *hidden, out_dim)]
-        case [_, list() as hidden, _]:
+            pass
+        case [in_dim, tuple() as hidden, out_dim, str() as activation]:
+            pass
+        case [_, list() as hidden, *_]:
             raise CompileError(
                 f"mlp hidden dims must be a bracket tuple like [256 256], "
                 f"got ({' '.join(map(str, hidden))})"
             )
-    raise CompileError(
-        f"mlp expects (mlp <in> [<hidden>...] <out>), got {args!r}"
-    )
+        case _:
+            raise CompileError(
+                f"mlp expects (mlp <in> [<hidden>...] <out> <activation>?), "
+                f"got {args!r}"
+            )
+    if activation not in ACTIVATIONS:
+        raise CompileError(
+            f"unknown activation '{activation}', "
+            f"expected one of: {' '.join(sorted(ACTIVATIONS))}"
+        )
+    dims = [_resolve_dim(d, dim_env) for d in (in_dim, *hidden, out_dim)]
+    return dims, activation
 
 
-def _compile_mlp(name, dims):
+def _compile_mlp(name, dims, activation):
     n_layers = len(dims) - 1
     inits = ",\n        ".join(
         f"init_dense(keys[{i}], {dims[i]}, {dims[i + 1]})" for i in range(n_layers)
@@ -170,7 +195,7 @@ def init_{name}(key):
 
 def {name}(params, x):
     for W, b in params[:-1]:
-        x = jax.nn.relu(x @ W + b)
+        x = {ACTIVATIONS[activation]}(x @ W + b)
     W, b = params[-1]
     return x @ W + b
 '''
