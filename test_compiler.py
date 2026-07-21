@@ -205,6 +205,85 @@ def test_residual_requires_matching_dims():
         compile_source("(define r (residual (mlp 8 [] 4)))")
 
 
+def test_let_dim_multiple_pairs():
+    out = compile_source("(let-dim d 16 heads 4 ffn 4d) (define m (layernorm ffn))")
+    assert "jnp.ones(64), jnp.zeros(64)" in out
+
+
+def test_let_dim_odd_binding_count_raises():
+    with pytest.raises(CompileError, match="name/dim pairs"):
+        compile_source("(let-dim d 16 heads) (define m (layernorm d))")
+
+
+def test_let_dim_non_symbol_name_raises():
+    with pytest.raises(CompileError, match="name must be a symbol"):
+        compile_source("(let-dim 4 16) (define m (layernorm 4))")
+
+
+def test_defined_block_composes_in_chain():
+    src = """
+    (let-dim d 16)
+    (define ffn (mlp d [4d] d))
+    (define block (chain (layernorm d) ffn))
+    """
+    out = compile_source(src)
+    assert "init_ffn(keys[1])" in out
+    assert "x = ffn(params[1], x)" in out
+    assert "block_layer1" not in out
+
+
+def test_defined_block_used_twice_gets_fresh_params():
+    src = "(define ffn (mlp 8 [] 8)) (define m (chain ffn ffn))"
+    out = compile_source(src)
+    assert "init_ffn(keys[0]), init_ffn(keys[1])" in out
+
+
+def test_top_level_reference_makes_alias():
+    out = compile_source("(define a (layernorm 8)) (define b a)")
+    assert "def init_b(key):\n    return init_a(key)" in out
+    assert "def b(params, x):\n    return a(params, x)" in out
+
+
+def test_undefined_block_reference_raises():
+    with pytest.raises(CompileError, match="undefined block 'ffn'"):
+        compile_source("(define m (chain (layernorm 8) ffn))")
+
+
+def test_reference_participates_in_dim_check():
+    with pytest.raises(CompileError, match="mismatch"):
+        compile_source("(define ffn (mlp 8 [] 4)) (define m (chain ffn (layernorm 5)))")
+
+
+def test_residual_over_reference():
+    out = compile_source("(define ffn (mlp 8 [] 8)) (define r (residual ffn))")
+    assert "return x + ffn(params, x)" in out
+
+
+def test_repeat_emits_body_once_and_loops():
+    src = "(let-dim d 16) (define stack (repeat 3 (residual (layernorm d))))"
+    out = compile_source(src)
+    assert out.count("def stack_body_inner(params, x):") == 1
+    assert "[init_stack_body(k) for k in jax.random.split(key, 3)]" in out
+    assert "for layer_params in params:" in out
+
+
+def test_repeat_count_can_be_expression():
+    src = "(let-dim layers 4) (define s (repeat (* 2 layers) (layernorm 8)))"
+    out = compile_source(src)
+    assert "jax.random.split(key, 8)" in out
+
+
+def test_repeat_over_reference():
+    src = "(define blk (layernorm 8)) (define s (repeat 2 blk))"
+    out = compile_source(src)
+    assert "[init_blk(k) for k in jax.random.split(key, 2)]" in out
+
+
+def test_repeat_requires_matching_dims():
+    with pytest.raises(CompileError, match="repeat requires matching"):
+        compile_source("(define s (repeat 2 (mlp 8 [] 4)))")
+
+
 def test_transformer_block_compiles():
     src = """
     (let-dim d 64)
@@ -233,10 +312,10 @@ def test_generated_module_runs_under_jax(tmp_path):
 def test_generated_transformer_block_runs_under_jax(tmp_path):
     jax = pytest.importorskip("jax")
     src = """
-    (let-dim d 16)
-    (define block (chain
-      (residual (chain (layernorm d) (attention d 4)))
-      (residual (chain (layernorm d) (mlp d [4d] d)))))
+    (let-dim d 16 heads 4 layers 2)
+    (define attn_block (residual (chain (layernorm d) (attention d heads))))
+    (define ffn_block (residual (chain (layernorm d) (mlp d [4d] d))))
+    (define block (repeat layers (chain attn_block ffn_block)))
     """
     mod_path = tmp_path / "gen_block.py"
     mod_path.write_text(compile_source(src))

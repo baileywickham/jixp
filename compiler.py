@@ -2,8 +2,13 @@
 
 DSL (top-level forms):
 
-    (let-dim <name> <dim>)           bind a name to a dimension at compile time
+    (let-dim <name> <dim> ...)       bind name/dim pairs at compile time;
+                                     later pairs may reference earlier ones
     (define <name> <block>)
+
+A block position also accepts the name of an earlier define, compiling to
+calls of that block's functions. Each reference initializes fresh params —
+a define is a template, not weight sharing.
 
 Blocks:
     (mlp <in> [<hidden>...] <out> <activation>?)
@@ -15,6 +20,8 @@ Blocks:
     (attention <dim> <heads>)        multi-head self-attention over (..., seq, dim)
     (chain <block> <block>...)       sequential composition
     (residual <block>)               x + block(x); block must preserve dim
+    (repeat <count> <block>)         count copies with independent params;
+                                     block must preserve dim
 
 A <dim> is a compile-time expression evaluated by the jisp interpreter:
 an int literal, a let-dim name, arithmetic like (* 4 d), or coefficient
@@ -86,26 +93,46 @@ def compile_source(source):
     """Compile jisp DSL source to Python module source."""
     defs = []
     helpers = set()
-    names = set()
+    registry = {}
     dim_env = _DimEnv(standard_env())
     for form in parse(source):
         match form:
-            case ["let-dim", str() as name, value] if name.isidentifier():
-                if name in dim_env:
-                    raise CompileError(f"duplicate let-dim: {name}")
-                dim_env[name] = _resolve_dim(value, dim_env)
+            case ["let-dim", *bindings] if bindings:
+                if len(bindings) % 2:
+                    raise CompileError(
+                        f"let-dim expects name/dim pairs, got {form!r}"
+                    )
+                for name, value in zip(bindings[::2], bindings[1::2]):
+                    if not (isinstance(name, str) and name.isidentifier()):
+                        raise CompileError(
+                            f"let-dim name must be a symbol, got {name!r}"
+                        )
+                    if name in dim_env:
+                        raise CompileError(f"duplicate let-dim: {name}")
+                    dim_env[name] = _resolve_dim(value, dim_env)
                 continue
             case ["define", str() as name, block] if name.isidentifier():
                 pass
             case _:
                 raise CompileError(
                     "top-level form must be (define <name> <block>) or "
-                    f"(let-dim <name> <dim>), got {form!r}"
+                    f"(let-dim <name> <dim> ...), got {form!r}"
                 )
-        if name in names:
+        if name in registry:
             raise CompileError(f"duplicate define: {name}")
-        names.add(name)
-        block_defs, _, _, block_helpers = _compile_block(name, block, dim_env)
+        block_defs, in_dim, out_dim, block_helpers, entry = _compile_block(
+            name, block, dim_env, registry
+        )
+        if entry != name:
+            block_defs = block_defs + [f'''
+def init_{name}(key):
+    return init_{entry}(key)
+
+
+def {name}(params, x):
+    return {entry}(params, x)
+''']
+        registry[name] = (in_dim, out_dim)
         defs.extend(block_defs)
         helpers |= block_helpers
     if not defs:
@@ -131,13 +158,22 @@ def _resolve_dim(form, dim_env):
     return value
 
 
-def _compile_block(name, block, dim_env):
-    """Compile one block; return (defs, in_dim, out_dim, helpers)."""
+def _compile_block(name, block, dim_env, registry):
+    """Compile one block; return (defs, in_dim, out_dim, helpers, entry).
+
+    entry is the function name call sites should use: name for structural
+    blocks, the referenced define's own name for block references.
+    """
     match block:
+        case str() as ref if ref in registry:
+            in_dim, out_dim = registry[ref]
+            return [], in_dim, out_dim, set(), ref
+        case str() as ref:
+            raise CompileError(f"undefined block '{ref}'")
         case ["mlp", *args]:
-            return _compile_mlp(name, *_mlp_spec(args, dim_env))
+            return (*_compile_mlp(name, *_mlp_spec(args, dim_env)), name)
         case ["layernorm", dim]:
-            return _compile_layernorm(name, _resolve_dim(dim, dim_env))
+            return (*_compile_layernorm(name, _resolve_dim(dim, dim_env)), name)
         case ["attention", dim_form, heads_form]:
             dim = _resolve_dim(dim_form, dim_env)
             heads = _resolve_dim(heads_form, dim_env)
@@ -145,11 +181,14 @@ def _compile_block(name, block, dim_env):
                 raise CompileError(
                     f"attention dim {dim} is not divisible by heads {heads}"
                 )
-            return _compile_attention(name, dim, heads)
+            return (*_compile_attention(name, dim, heads), name)
         case ["chain", *blocks] if blocks:
-            return _compile_chain(name, blocks, dim_env)
+            return _compile_chain(name, blocks, dim_env, registry)
         case ["residual", sub_block]:
-            return _compile_residual(name, sub_block, dim_env)
+            return _compile_residual(name, sub_block, dim_env, registry)
+        case ["repeat", count_form, sub_block]:
+            count = _resolve_dim(count_form, dim_env)
+            return _compile_repeat(name, count, sub_block, dim_env, registry)
         case _:
             raise CompileError(f"unknown block: {block!r}")
 
@@ -237,48 +276,70 @@ def {name}(params, x):
     return [defs], dim, dim, {"attention"}
 
 
-def _compile_residual(name, block, dim_env):
-    sub_name = f"{name}_inner"
-    defs, sub_in, sub_out, helpers = _compile_block(sub_name, block, dim_env)
+def _compile_residual(name, block, dim_env, registry):
+    defs, sub_in, sub_out, helpers, entry = _compile_block(
+        f"{name}_inner", block, dim_env, registry
+    )
     if sub_in != sub_out:
         raise CompileError(
             f"residual requires matching in/out dims in {name}, "
             f"got {sub_in} -> {sub_out}"
         )
-    defs.append(f'''
+    defs = defs + [f'''
 def init_{name}(key):
-    return init_{sub_name}(key)
+    return init_{entry}(key)
 
 
 def {name}(params, x):
-    return x + {sub_name}(params, x)
-''')
-    return defs, sub_in, sub_out, helpers
+    return x + {entry}(params, x)
+''']
+    return defs, sub_in, sub_out, helpers, name
 
 
-def _compile_chain(name, blocks, dim_env):
+def _compile_repeat(name, count, block, dim_env, registry):
+    defs, sub_in, sub_out, helpers, entry = _compile_block(
+        f"{name}_body", block, dim_env, registry
+    )
+    if sub_in != sub_out:
+        raise CompileError(
+            f"repeat requires matching in/out dims in {name}, "
+            f"got {sub_in} -> {sub_out}"
+        )
+    defs = defs + [f'''
+def init_{name}(key):
+    return [init_{entry}(k) for k in jax.random.split(key, {count})]
+
+
+def {name}(params, x):
+    for layer_params in params:
+        x = {entry}(layer_params, x)
+    return x
+''']
+    return defs, sub_in, sub_out, helpers, name
+
+
+def _compile_chain(name, blocks, dim_env, registry):
     defs = []
     helpers = set()
     dims = []
-    sub_names = []
+    entries = []
     for i, sub_block in enumerate(blocks):
-        sub_name = f"{name}_layer{i}"
-        sub_defs, sub_in, sub_out, sub_helpers = _compile_block(
-            sub_name, sub_block, dim_env
+        sub_defs, sub_in, sub_out, sub_helpers, entry = _compile_block(
+            f"{name}_layer{i}", sub_block, dim_env, registry
         )
         defs.extend(sub_defs)
         helpers |= sub_helpers
         dims.append((sub_in, sub_out))
-        sub_names.append(sub_name)
+        entries.append(entry)
     for i in range(len(dims) - 1):
         if dims[i][1] != dims[i + 1][0]:
             raise CompileError(
                 f"chain dimension mismatch in {name}: layer {i} outputs "
                 f"{dims[i][1]} but layer {i + 1} expects {dims[i + 1][0]}"
             )
-    inits = ", ".join(f"init_{s}(keys[{i}])" for i, s in enumerate(sub_names))
+    inits = ", ".join(f"init_{e}(keys[{i}])" for i, e in enumerate(entries))
     applies = "\n".join(
-        f"    x = {s}(params[{i}], x)" for i, s in enumerate(sub_names)
+        f"    x = {e}(params[{i}], x)" for i, e in enumerate(entries)
     )
     defs.append(f'''
 def init_{name}(key):
@@ -290,7 +351,7 @@ def {name}(params, x):
 {applies}
     return x
 ''')
-    return defs, dims[0][0], dims[-1][1], helpers
+    return defs, dims[0][0], dims[-1][1], helpers, name
 
 
 def main():

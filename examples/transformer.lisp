@@ -1,6 +1,6 @@
-(let-dim d 128)
-(let-dim heads 8)
+(let-dim d 128 heads 8 layers 4)
 
-(define block (chain
-  (residual (chain (layernorm d) (attention d heads)))
-  (residual (chain (layernorm d) (mlp d [4d] d)))))
+(define attn_block (residual (chain (layernorm d) (attention d heads))))
+(define ffn_block (residual (chain (layernorm d) (mlp d [4d] d))))
+
+(define encoder (repeat layers (chain attn_block ffn_block)))
