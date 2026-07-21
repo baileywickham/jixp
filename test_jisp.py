@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import pytest
 
 from jisp import ParseError, parse, parse_atom, tokenize
@@ -67,10 +70,6 @@ def test_parse_unexpected_close_paren():
 def test_parse_unclosed_open_paren():
     with pytest.raises(ParseError, match=r"unclosed '\('"):
         parse("(a (b)")
-
-
-import subprocess
-import sys
 
 
 def run_cli(*argv):
