@@ -12,12 +12,14 @@ A block position also accepts the name of an earlier define, compiling to
 calls of that block's functions. Each reference initializes fresh params —
 a define is a template, not weight sharing.
 
-Blocks:
-    (mlp <in> [<hidden>...] <out> <activation>?)
-                                     dense layers; <activation> is an optional
-                                     symbol (relu gelu silu sigmoid tanh),
-                                     default gelu, applied after each hidden
-                                     layer (never after the output layer)
+Blocks take required args positionally, then keyword options: valued
+(:activation gelu) or bare flags (:causal).
+
+    (mlp <in> [<hidden>...] <out> :activation <name>?)
+                                     dense layers; activation is one of
+                                     relu gelu silu sigmoid tanh (default
+                                     gelu), applied after each hidden layer
+                                     (never after the output layer)
     (layernorm <dim>)
     (attention <dim> <heads> :causal?)
                                      multi-head self-attention over
@@ -146,6 +148,46 @@ def {name}(params, x):
     return "\n".join(parts)
 
 
+def _is_keyword(value):
+    return isinstance(value, str) and value.startswith(":")
+
+
+def _parse_options(args, spec, block):
+    """Split block args into leading positionals and trailing keyword options.
+
+    spec maps each keyword to "flag" (bare) or "value" (consumes the next
+    arg). Returns (positionals, options) with flag options stored as True.
+    """
+    positionals = []
+    options = {}
+    i = 0
+    while i < len(args) and not _is_keyword(args[i]):
+        positionals.append(args[i])
+        i += 1
+    while i < len(args):
+        keyword = args[i]
+        if not _is_keyword(keyword):
+            raise CompileError(
+                f"{block}: positional arg {keyword!r} after keyword options"
+            )
+        if keyword not in spec:
+            raise CompileError(
+                f"unknown {block} option {keyword}, "
+                f"expected one of: {' '.join(sorted(spec))}"
+            )
+        if keyword in options:
+            raise CompileError(f"duplicate {block} option {keyword}")
+        if spec[keyword] == "flag":
+            options[keyword] = True
+            i += 1
+        else:
+            if i + 1 >= len(args) or _is_keyword(args[i + 1]):
+                raise CompileError(f"{block} option {keyword} expects a value")
+            options[keyword] = args[i + 1]
+            i += 2
+    return positionals, options
+
+
 def _let_dim_pairs(bindings, form):
     """Normalize let-dim bindings to (name, value) pairs.
 
@@ -198,19 +240,24 @@ def _compile_block(name, block, dim_env, registry):
             return (*_compile_mlp(name, *_mlp_spec(args, dim_env)), name)
         case ["layernorm", dim]:
             return (*_compile_layernorm(name, _resolve_dim(dim, dim_env)), name)
-        case ["attention", dim_form, heads_form, *flags]:
+        case ["attention", *args]:
+            positionals, options = _parse_options(args, {":causal": "flag"}, "attention")
+            match positionals:
+                case [dim_form, heads_form]:
+                    pass
+                case _:
+                    raise CompileError(
+                        f"attention expects (attention <dim> <heads> :causal?), "
+                        f"got {args!r}"
+                    )
             dim = _resolve_dim(dim_form, dim_env)
             heads = _resolve_dim(heads_form, dim_env)
             if dim % heads:
                 raise CompileError(
                     f"attention dim {dim} is not divisible by heads {heads}"
                 )
-            if bad := set(flags) - {":causal"}:
-                raise CompileError(
-                    f"unknown attention flag(s): {' '.join(sorted(map(str, bad)))} "
-                    f"(flags use keyword syntax, e.g. :causal)"
-                )
-            return (*_compile_attention(name, dim, heads, ":causal" in flags), name)
+            causal = options.get(":causal", False)
+            return (*_compile_attention(name, dim, heads, causal), name)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env, registry)
         case ["residual", sub_block]:
@@ -223,25 +270,28 @@ def _compile_block(name, block, dim_env, registry):
 
 
 def _mlp_spec(args, dim_env):
-    activation = "gelu"
-    match args:
+    positionals, options = _parse_options(args, {":activation": "value"}, "mlp")
+    match positionals:
         case [in_dim, tuple() as hidden, out_dim]:
-            pass
-        case [in_dim, tuple() as hidden, out_dim, str() as activation]:
             pass
         case [_, list() as hidden, *_]:
             raise CompileError(
                 f"mlp hidden dims must be a bracket tuple like [256 256], "
                 f"got ({' '.join(map(str, hidden))})"
             )
+        case [_, tuple(), _, str() as extra] if extra in ACTIVATIONS:
+            raise CompileError(
+                f"activation is a keyword option now: use :activation {extra}"
+            )
         case _:
             raise CompileError(
-                f"mlp expects (mlp <in> [<hidden>...] <out> <activation>?), "
+                f"mlp expects (mlp <in> [<hidden>...] <out> :activation <name>?), "
                 f"got {args!r}"
             )
+    activation = options.get(":activation", "gelu")
     if activation not in ACTIVATIONS:
         raise CompileError(
-            f"unknown activation '{activation}', "
+            f"unknown activation {activation!r}, "
             f"expected one of: {' '.join(sorted(ACTIVATIONS))}"
         )
     dims = [_resolve_dim(d, dim_env) for d in (in_dim, *hidden, out_dim)]

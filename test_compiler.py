@@ -51,18 +51,43 @@ def test_mlp_defaults_to_gelu():
 
 
 def test_mlp_explicit_activation():
-    out = compile_source("(define m (mlp 8 [16] 4 relu))")
+    out = compile_source("(define m (mlp 8 [16] 4 :activation relu))")
     assert "jax.nn.relu(x @ W + b)" in out
 
 
 def test_mlp_tanh_uses_jnp():
-    out = compile_source("(define m (mlp 8 [16] 4 tanh))")
+    out = compile_source("(define m (mlp 8 [16] 4 :activation tanh))")
     assert "jnp.tanh(x @ W + b)" in out
 
 
 def test_mlp_unknown_activation_raises():
     with pytest.raises(CompileError, match="unknown activation 'elu'"):
-        compile_source("(define m (mlp 8 [16] 4 elu))")
+        compile_source("(define m (mlp 8 [16] 4 :activation elu))")
+
+
+def test_mlp_bare_activation_gives_migration_error():
+    with pytest.raises(CompileError, match=":activation relu"):
+        compile_source("(define m (mlp 8 [16] 4 relu))")
+
+
+def test_option_value_missing_raises():
+    with pytest.raises(CompileError, match=":activation expects a value"):
+        compile_source("(define m (mlp 8 [16] 4 :activation))")
+
+
+def test_duplicate_option_raises():
+    with pytest.raises(CompileError, match="duplicate mlp option"):
+        compile_source("(define m (mlp 8 [16] 4 :activation relu :activation tanh))")
+
+
+def test_positional_after_keyword_raises():
+    with pytest.raises(CompileError, match="positional arg .* after keyword"):
+        compile_source("(define attn (attention 32 :causal 4))")
+
+
+def test_unknown_option_lists_valid_ones():
+    with pytest.raises(CompileError, match="unknown mlp option :casual.*:activation"):
+        compile_source("(define m (mlp 8 [16] 4 :casual))")
 
 
 def test_chain_dimension_mismatch_raises():
@@ -202,7 +227,7 @@ def test_non_causal_attention_has_no_mask():
 
 
 def test_unknown_attention_flag_raises():
-    with pytest.raises(CompileError, match="unknown attention flag"):
+    with pytest.raises(CompileError, match="unknown attention option"):
         compile_source("(define attn (attention 32 4 :casual))")
 
 
