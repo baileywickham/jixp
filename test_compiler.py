@@ -189,6 +189,42 @@ def test_attention_heads_must_divide_dim():
         compile_source("(define attn (attention 128 7))")
 
 
+def test_causal_attention_emits_tril_mask():
+    out = compile_source("(define attn (attention 32 4 causal))")
+    assert "jnp.tril(jnp.ones((seq, seq), dtype=bool))" in out
+    assert "jnp.where(mask, scores, -jnp.inf)" in out
+    compile(out, "<generated>", "exec")
+
+
+def test_non_causal_attention_has_no_mask():
+    out = compile_source("(define attn (attention 32 4))")
+    assert "tril" not in out
+
+
+def test_unknown_attention_flag_raises():
+    with pytest.raises(CompileError, match="unknown attention flag"):
+        compile_source("(define attn (attention 32 4 casual))")
+
+
+def test_causal_attention_ignores_future_positions(tmp_path):
+    jax = pytest.importorskip("jax")
+    import importlib.util
+
+    src = "(define attn (attention 8 2 causal))"
+    mod_path = tmp_path / "gen_causal.py"
+    mod_path.write_text(compile_source(src))
+    spec = importlib.util.spec_from_file_location("gen_causal", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    params = mod.init_attn(jax.random.PRNGKey(0))
+    x = jax.random.normal(jax.random.PRNGKey(1), (5, 8))
+    y = mod.attn(params, x)
+    x_perturbed = x.at[-1].add(1.0)
+    y_perturbed = mod.attn(params, x_perturbed)
+    assert jax.numpy.allclose(y[:-1], y_perturbed[:-1], atol=1e-6)
+    assert not jax.numpy.allclose(y[-1], y_perturbed[-1])
+
+
 def test_attention_helpers_only_emitted_when_used():
     assert "split_heads" not in compile_source("(define m (layernorm 4))")
 

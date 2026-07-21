@@ -19,7 +19,10 @@ Blocks:
                                      default gelu, applied after each hidden
                                      layer (never after the output layer)
     (layernorm <dim>)
-    (attention <dim> <heads>)        multi-head self-attention over (..., seq, dim)
+    (attention <dim> <heads> causal?)
+                                     multi-head self-attention over
+                                     (..., seq, dim); the optional causal
+                                     flag masks future positions
     (chain <block> <block>...)       sequential composition
     (residual <block>)               x + block(x); block must preserve dim
     (repeat <count> <block>)         count copies with independent params;
@@ -195,14 +198,18 @@ def _compile_block(name, block, dim_env, registry):
             return (*_compile_mlp(name, *_mlp_spec(args, dim_env)), name)
         case ["layernorm", dim]:
             return (*_compile_layernorm(name, _resolve_dim(dim, dim_env)), name)
-        case ["attention", dim_form, heads_form]:
+        case ["attention", dim_form, heads_form, *flags]:
             dim = _resolve_dim(dim_form, dim_env)
             heads = _resolve_dim(heads_form, dim_env)
             if dim % heads:
                 raise CompileError(
                     f"attention dim {dim} is not divisible by heads {heads}"
                 )
-            return (*_compile_attention(name, dim, heads), name)
+            if bad := set(flags) - {"causal"}:
+                raise CompileError(
+                    f"unknown attention flag(s): {' '.join(sorted(map(str, bad)))}"
+                )
+            return (*_compile_attention(name, dim, heads, "causal" in flags), name)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env, registry)
         case ["residual", sub_block]:
@@ -277,8 +284,14 @@ def {name}(params, x):
     return [defs], dim, dim, set()
 
 
-def _compile_attention(name, dim, heads):
+def _compile_attention(name, dim, heads, causal):
     head_dim = dim // heads
+    mask = ""
+    if causal:
+        mask = '''    seq = x.shape[-2]
+    mask = jnp.tril(jnp.ones((seq, seq), dtype=bool))
+    scores = jnp.where(mask, scores, -jnp.inf)
+'''
     defs = f'''
 def init_{name}(key):
     keys = jax.random.split(key, 4)
@@ -291,7 +304,7 @@ def {name}(params, x):
     k = split_heads(x @ Wk, {heads})
     v = split_heads(x @ Wv, {heads})
     scores = q @ k.swapaxes(-1, -2) / jnp.sqrt({head_dim})
-    out = jax.nn.softmax(scores, axis=-1) @ v
+{mask}    out = jax.nn.softmax(scores, axis=-1) @ v
     return merge_heads(out) @ Wo
 '''
     return [defs], dim, dim, {"attention"}
