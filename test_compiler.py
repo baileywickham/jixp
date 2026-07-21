@@ -51,43 +51,78 @@ def test_mlp_defaults_to_gelu():
 
 
 def test_mlp_explicit_activation():
-    out = compile_source("(define m (mlp 8 [16] 4 :activation relu))")
+    out = compile_source("(define m (mlp 8 [16] 4 #:activation relu))")
     assert "jax.nn.relu(x @ W + b)" in out
 
 
 def test_mlp_tanh_uses_jnp():
-    out = compile_source("(define m (mlp 8 [16] 4 :activation tanh))")
+    out = compile_source("(define m (mlp 8 [16] 4 #:activation tanh))")
     assert "jnp.tanh(x @ W + b)" in out
 
 
 def test_mlp_unknown_activation_raises():
     with pytest.raises(CompileError, match="unknown activation 'elu'"):
-        compile_source("(define m (mlp 8 [16] 4 :activation elu))")
+        compile_source("(define m (mlp 8 [16] 4 #:activation elu))")
 
 
 def test_mlp_bare_activation_gives_migration_error():
-    with pytest.raises(CompileError, match=":activation relu"):
+    with pytest.raises(CompileError, match="#:activation relu"):
         compile_source("(define m (mlp 8 [16] 4 relu))")
 
 
+def test_clojure_style_keyword_gives_migration_error():
+    with pytest.raises(CompileError, match="Racket keyword syntax, e.g. #:causal"):
+        compile_source("(define attn (attention 32 4 :causal))")
+
+
+def test_line_comments_are_ignored():
+    src = """
+    ; a whole-line comment
+    (define net (mlp 2 [8] 1))  ; trailing comment
+    """
+    out = compile_source(src)
+    assert "def init_net(key):" in out
+
+
+def test_hyphenated_names_mangle_to_underscores():
+    src = """
+    (let-dim (d 16))
+    (define attn-block (residual (layernorm d)))
+    (define stack (repeat 2 attn-block))
+    """
+    out = compile_source(src)
+    assert "def attn_block(params, x):" in out
+    assert "[init_attn_block(k) for k in jax.random.split(key, 2)]" in out
+
+
+def test_mangled_name_collision_raises():
+    with pytest.raises(CompileError, match="collides"):
+        compile_source("(define a-b (layernorm 4)) (define a_b (layernorm 4))")
+
+
+def test_let_dim_bracket_bindings():
+    out = compile_source("(let-dim [d 16] [heads 4]) (define m (layernorm (* d heads)))")
+    assert "jnp.ones(64), jnp.zeros(64)" in out
+
+
 def test_option_value_missing_raises():
-    with pytest.raises(CompileError, match=":activation expects a value"):
-        compile_source("(define m (mlp 8 [16] 4 :activation))")
+    with pytest.raises(CompileError, match="#:activation expects a value"):
+        compile_source("(define m (mlp 8 [16] 4 #:activation))")
 
 
 def test_duplicate_option_raises():
     with pytest.raises(CompileError, match="duplicate mlp option"):
-        compile_source("(define m (mlp 8 [16] 4 :activation relu :activation tanh))")
+        compile_source("(define m (mlp 8 [16] 4 #:activation relu #:activation tanh))")
 
 
 def test_positional_after_keyword_raises():
     with pytest.raises(CompileError, match="positional arg .* after keyword"):
-        compile_source("(define attn (attention 32 :causal 4))")
+        compile_source("(define attn (attention 32 #:causal 4))")
 
 
 def test_unknown_option_lists_valid_ones():
-    with pytest.raises(CompileError, match="unknown mlp option :casual.*:activation"):
-        compile_source("(define m (mlp 8 [16] 4 :casual))")
+    with pytest.raises(CompileError, match="unknown mlp option #:casual.*#:activation"):
+        compile_source("(define m (mlp 8 [16] 4 #:casual))")
 
 
 def test_chain_dimension_mismatch_raises():
@@ -215,7 +250,7 @@ def test_attention_heads_must_divide_dim():
 
 
 def test_causal_attention_emits_tril_mask():
-    out = compile_source("(define attn (attention 32 4 :causal))")
+    out = compile_source("(define attn (attention 32 4 #:causal))")
     assert "jnp.tril(jnp.ones((seq, seq), dtype=bool))" in out
     assert "jnp.where(mask, scores, -jnp.inf)" in out
     compile(out, "<generated>", "exec")
@@ -228,14 +263,14 @@ def test_non_causal_attention_has_no_mask():
 
 def test_unknown_attention_flag_raises():
     with pytest.raises(CompileError, match="unknown attention option"):
-        compile_source("(define attn (attention 32 4 :casual))")
+        compile_source("(define attn (attention 32 4 #:casual))")
 
 
 def test_causal_attention_ignores_future_positions(tmp_path):
     jax = pytest.importorskip("jax")
     import importlib.util
 
-    src = "(define attn (attention 8 2 :causal))"
+    src = "(define attn (attention 8 2 #:causal))"
     mod_path = tmp_path / "gen_causal.py"
     mod_path.write_text(compile_source(src))
     spec = importlib.util.spec_from_file_location("gen_causal", mod_path)

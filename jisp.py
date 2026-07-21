@@ -15,7 +15,11 @@ class EvalError(Exception):
 
 
 def tokenize(source):
-    """Split Lisp source into paren, bracket, and atom tokens."""
+    """Split source into paren, bracket, and atom tokens.
+
+    ';' starts a comment that runs to end of line.
+    """
+    source = "\n".join(line.split(";", 1)[0] for line in source.splitlines())
     for delim in "()[]":
         source = source.replace(delim, f" {delim} ")
     return source.split()

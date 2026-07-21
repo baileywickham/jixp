@@ -15,10 +15,10 @@ jisp is three small pieces, each built on the last:
 (let-dim
   (d 128) (heads 8) (layers 4))
 
-(define attn_block (residual (chain (layernorm d) (attention d heads :causal))))
-(define ffn_block (residual (chain (layernorm d) (mlp d [4d] d))))
+(define attn-block (residual (chain (layernorm d) (attention d heads #:causal))))
+(define ffn-block (residual (chain (layernorm d) (mlp d [4d] d))))
 
-(define encoder (repeat layers (chain attn_block ffn_block)))
+(define encoder (repeat layers (chain attn-block ffn-block)))
 ```
 
 ```console
@@ -55,7 +55,7 @@ train-XOR example lives in `examples/`:
 
 ```lisp
 ; examples/xor.jisp
-(define net (mlp 2 [8 8] 1 :activation tanh))
+(define net (mlp 2 [8 8] 1 #:activation tanh))
 ```
 
 ```python
@@ -97,9 +97,9 @@ Blocks:
 
 | block | meaning |
 |---|---|
-| `(mlp in [hidden...] out :activation gelu?)` | dense layers; activation (`relu` `gelu` `silu` `sigmoid` `tanh`, default `gelu`) after each hidden layer, never after the output layer |
+| `(mlp in [hidden...] out #:activation gelu?)` | dense layers; activation (`relu` `gelu` `silu` `sigmoid` `tanh`, default `gelu`) after each hidden layer, never after the output layer |
 | `(layernorm dim)` | layer normalization with scale and shift |
-| `(attention dim heads :causal?)` | multi-head self-attention over `(..., seq, dim)`; `:causal` masks future positions |
+| `(attention dim heads #:causal?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions |
 | `(chain block...)` | sequential composition |
 | `(residual block)` | `x + block(x)`; block must preserve dim |
 | `(repeat count block)` | `count` copies with independent params; block must preserve dim |
@@ -126,10 +126,10 @@ before any Python runs.
 ### Syntax notes
 
 - `(...)` is always a form; `[...]` is always data (a tuple), e.g. mlp hidden dims.
-- Required args are positional; options are keywords — valued (`:activation relu`)
-  or flags (`:causal`).
+- Required args are positional; options are keywords — valued (`#:activation relu`)
+  or flags (`#:causal`).
 - `define` names become Python function names, so they must be valid Python
-  identifiers (`attn_block`, not `attn-block`).
+  identifiers (`attn-block`, not `attn-block`).
 
 ## The Lisp
 

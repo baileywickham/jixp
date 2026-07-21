@@ -12,18 +12,18 @@ A block position also accepts the name of an earlier define, compiling to
 calls of that block's functions. Each reference initializes fresh params —
 a define is a template, not weight sharing.
 
-Blocks take required args positionally, then keyword options: valued
-(:activation gelu) or bare flags (:causal).
+Blocks take required args positionally, then Racket-style keyword options:
+valued (#:activation gelu) or bare flags (#:causal).
 
-    (mlp <in> [<hidden>...] <out> :activation <name>?)
+    (mlp <in> [<hidden>...] <out> #:activation <name>?)
                                      dense layers; activation is one of
                                      relu gelu silu sigmoid tanh (default
                                      gelu), applied after each hidden layer
                                      (never after the output layer)
     (layernorm <dim>)
-    (attention <dim> <heads> :causal?)
+    (attention <dim> <heads> #:causal?)
                                      multi-head self-attention over
-                                     (..., seq, dim); the optional :causal
+                                     (..., seq, dim); the optional #:causal
                                      flag masks future positions
     (chain <block> <block>...)       sequential composition
     (residual <block>)               x + block(x); block must preserve dim
@@ -36,7 +36,9 @@ sugar like 4d (meaning (* 4 d)). Brackets [...] are data tuples, used for
 mlp hidden dims.
 
 Each define compiles to a pair of functions in the output module:
-init_<name>(key) building a params pytree, and <name>(params, x).
+init_<name>(key) building a params pytree, and <name>(params, x). Names may
+use Racket-style hyphens (attn-block); they become underscores in the
+generated Python. ';' starts a line comment.
 """
 
 import re
@@ -96,17 +98,27 @@ class _DimEnv(dict):
         raise KeyError(name)
 
 
+def _mangle(name):
+    """Map a DSL name to the Python identifier used in generated code."""
+    return name.replace("-", "_")
+
+
+def _valid_name(name):
+    return isinstance(name, str) and _mangle(name).isidentifier()
+
+
 def compile_source(source):
     """Compile jisp DSL source to Python module source."""
     defs = []
     helpers = set()
     registry = {}
+    mangled_names = set()
     dim_env = _DimEnv(standard_env())
     for form in parse(source):
         match form:
             case ["let-dim", *bindings] if bindings:
                 for name, value in _let_dim_pairs(bindings, form):
-                    if not (isinstance(name, str) and name.isidentifier()):
+                    if not _valid_name(name):
                         raise CompileError(
                             f"let-dim name must be a symbol, got {name!r}"
                         )
@@ -114,28 +126,35 @@ def compile_source(source):
                         raise CompileError(f"duplicate let-dim: {name}")
                     dim_env[name] = _resolve_dim(value, dim_env)
                 continue
-            case ["define", str() as name, block] if name.isidentifier():
+            case ["define", str() as name, block] if _valid_name(name):
                 pass
             case _:
                 raise CompileError(
                     "top-level form must be (define <name> <block>) or "
-                    f"(let-dim <name> <dim> ...), got {form!r}"
+                    f"(let-dim (<name> <dim>) ...), got {form!r}"
                 )
         if name in registry:
             raise CompileError(f"duplicate define: {name}")
+        mangled = _mangle(name)
+        if mangled in mangled_names:
+            raise CompileError(
+                f"define '{name}' collides with an earlier define "
+                f"(both become '{mangled}' in Python)"
+            )
+        mangled_names.add(mangled)
         block_defs, in_dim, out_dim, block_helpers, entry = _compile_block(
-            name, block, dim_env, registry
+            mangled, block, dim_env, registry
         )
-        if entry != name:
+        if entry != mangled:
             block_defs = block_defs + [f'''
-def init_{name}(key):
+def init_{mangled}(key):
     return init_{entry}(key)
 
 
-def {name}(params, x):
+def {mangled}(params, x):
     return {entry}(params, x)
 ''']
-        registry[name] = (in_dim, out_dim)
+        registry[name] = (in_dim, out_dim, mangled)
         defs.extend(block_defs)
         helpers |= block_helpers
     if not defs:
@@ -149,7 +168,7 @@ def {name}(params, x):
 
 
 def _is_keyword(value):
-    return isinstance(value, str) and value.startswith(":")
+    return isinstance(value, str) and value.startswith("#:")
 
 
 def _parse_options(args, spec, block):
@@ -162,6 +181,10 @@ def _parse_options(args, spec, block):
     options = {}
     i = 0
     while i < len(args) and not _is_keyword(args[i]):
+        if isinstance(args[i], str) and args[i].startswith(":"):
+            raise CompileError(
+                f"{block}: options use Racket keyword syntax, e.g. #{args[i]}"
+            )
         positionals.append(args[i])
         i += 1
     while i < len(args):
@@ -191,11 +214,11 @@ def _parse_options(args, spec, block):
 def _let_dim_pairs(bindings, form):
     """Normalize let-dim bindings to (name, value) pairs.
 
-    Grouped form (let-dim (d 128) (heads 8)) when the first binding is a
-    list — the flat form always starts with a name symbol; flat pairs
-    (let-dim d 128 heads 8) otherwise.
+    Grouped form (let-dim (d 128) [heads 8] ...) when the first binding is
+    a list or bracket tuple — the flat form always starts with a name
+    symbol; flat pairs (let-dim d 128 heads 8) otherwise.
     """
-    if isinstance(bindings[0], list):
+    if isinstance(bindings[0], (list, tuple)):
         pairs = []
         for binding in bindings:
             match binding:
@@ -232,8 +255,8 @@ def _compile_block(name, block, dim_env, registry):
     """
     match block:
         case str() as ref if ref in registry:
-            in_dim, out_dim = registry[ref]
-            return [], in_dim, out_dim, set(), ref
+            in_dim, out_dim, mangled = registry[ref]
+            return [], in_dim, out_dim, set(), mangled
         case str() as ref:
             raise CompileError(f"undefined block '{ref}'")
         case ["mlp", *args]:
@@ -241,13 +264,13 @@ def _compile_block(name, block, dim_env, registry):
         case ["layernorm", dim]:
             return (*_compile_layernorm(name, _resolve_dim(dim, dim_env)), name)
         case ["attention", *args]:
-            positionals, options = _parse_options(args, {":causal": "flag"}, "attention")
+            positionals, options = _parse_options(args, {"#:causal": "flag"}, "attention")
             match positionals:
                 case [dim_form, heads_form]:
                     pass
                 case _:
                     raise CompileError(
-                        f"attention expects (attention <dim> <heads> :causal?), "
+                        f"attention expects (attention <dim> <heads> #:causal?), "
                         f"got {args!r}"
                     )
             dim = _resolve_dim(dim_form, dim_env)
@@ -256,7 +279,7 @@ def _compile_block(name, block, dim_env, registry):
                 raise CompileError(
                     f"attention dim {dim} is not divisible by heads {heads}"
                 )
-            causal = options.get(":causal", False)
+            causal = options.get("#:causal", False)
             return (*_compile_attention(name, dim, heads, causal), name)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env, registry)
@@ -270,7 +293,7 @@ def _compile_block(name, block, dim_env, registry):
 
 
 def _mlp_spec(args, dim_env):
-    positionals, options = _parse_options(args, {":activation": "value"}, "mlp")
+    positionals, options = _parse_options(args, {"#:activation": "value"}, "mlp")
     match positionals:
         case [in_dim, tuple() as hidden, out_dim]:
             pass
@@ -281,14 +304,14 @@ def _mlp_spec(args, dim_env):
             )
         case [_, tuple(), _, str() as extra] if extra in ACTIVATIONS:
             raise CompileError(
-                f"activation is a keyword option now: use :activation {extra}"
+                f"activation is a keyword option now: use #:activation {extra}"
             )
         case _:
             raise CompileError(
-                f"mlp expects (mlp <in> [<hidden>...] <out> :activation <name>?), "
+                f"mlp expects (mlp <in> [<hidden>...] <out> #:activation <name>?), "
                 f"got {args!r}"
             )
-    activation = options.get(":activation", "gelu")
+    activation = options.get("#:activation", "gelu")
     if activation not in ACTIVATIONS:
         raise CompileError(
             f"unknown activation {activation!r}, "
