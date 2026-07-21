@@ -20,3 +20,32 @@ def parse_atom(token):
         return float(token)
     except ValueError:
         return token
+
+
+def parse(source):
+    """Parse Lisp source into a list of top-level forms."""
+    tokens = tokenize(source)
+    forms = []
+    pos = 0
+    while pos < len(tokens):
+        form, pos = _read_form(tokens, pos)
+        forms.append(form)
+    return forms
+
+
+def _read_form(tokens, pos):
+    """Read one form starting at tokens[pos]; return (form, next_pos)."""
+    token = tokens[pos]
+    if token == "(":
+        items = []
+        pos += 1
+        while True:
+            if pos >= len(tokens):
+                raise ParseError("unclosed '('")
+            if tokens[pos] == ")":
+                return items, pos + 1
+            item, pos = _read_form(tokens, pos)
+            items.append(item)
+    if token == ")":
+        raise ParseError("unexpected ')'")
+    return parse_atom(token), pos + 1

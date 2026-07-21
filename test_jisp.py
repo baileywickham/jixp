@@ -1,4 +1,6 @@
-from jisp import parse_atom, tokenize
+import pytest
+
+from jisp import ParseError, parse, parse_atom, tokenize
 
 
 def test_tokenize_pads_parens_and_splits():
@@ -31,3 +33,37 @@ def test_parse_atom_symbol():
 
 def test_parse_atom_symbol_that_looks_numeric_ish():
     assert parse_atom("1+") == "1+"
+
+
+def test_parse_single_atom():
+    assert parse("42") == [42]
+
+
+def test_parse_flat_list():
+    assert parse("(add 1 2.5)") == [["add", 1, 2.5]]
+
+
+def test_parse_nested_list():
+    assert parse("(a (b (c)) d)") == [["a", ["b", ["c"]], "d"]]
+
+
+def test_parse_empty_list():
+    assert parse("()") == [[]]
+
+
+def test_parse_multiple_top_level_forms():
+    assert parse("(a) (b 1)") == [["a"], ["b", 1]]
+
+
+def test_parse_empty_source_gives_no_forms():
+    assert parse("") == []
+
+
+def test_parse_unexpected_close_paren():
+    with pytest.raises(ParseError, match=r"unexpected '\)'"):
+        parse(")")
+
+
+def test_parse_unclosed_open_paren():
+    with pytest.raises(ParseError, match=r"unclosed '\('"):
+        parse("(a (b)")
