@@ -190,7 +190,7 @@ def test_attention_heads_must_divide_dim():
 
 
 def test_causal_attention_emits_tril_mask():
-    out = compile_source("(define attn (attention 32 4 causal))")
+    out = compile_source("(define attn (attention 32 4 :causal))")
     assert "jnp.tril(jnp.ones((seq, seq), dtype=bool))" in out
     assert "jnp.where(mask, scores, -jnp.inf)" in out
     compile(out, "<generated>", "exec")
@@ -203,14 +203,14 @@ def test_non_causal_attention_has_no_mask():
 
 def test_unknown_attention_flag_raises():
     with pytest.raises(CompileError, match="unknown attention flag"):
-        compile_source("(define attn (attention 32 4 casual))")
+        compile_source("(define attn (attention 32 4 :casual))")
 
 
 def test_causal_attention_ignores_future_positions(tmp_path):
     jax = pytest.importorskip("jax")
     import importlib.util
 
-    src = "(define attn (attention 8 2 causal))"
+    src = "(define attn (attention 8 2 :causal))"
     mod_path = tmp_path / "gen_causal.py"
     mod_path.write_text(compile_source(src))
     spec = importlib.util.spec_from_file_location("gen_causal", mod_path)

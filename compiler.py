@@ -19,9 +19,9 @@ Blocks:
                                      default gelu, applied after each hidden
                                      layer (never after the output layer)
     (layernorm <dim>)
-    (attention <dim> <heads> causal?)
+    (attention <dim> <heads> :causal?)
                                      multi-head self-attention over
-                                     (..., seq, dim); the optional causal
+                                     (..., seq, dim); the optional :causal
                                      flag masks future positions
     (chain <block> <block>...)       sequential composition
     (residual <block>)               x + block(x); block must preserve dim
@@ -205,11 +205,12 @@ def _compile_block(name, block, dim_env, registry):
                 raise CompileError(
                     f"attention dim {dim} is not divisible by heads {heads}"
                 )
-            if bad := set(flags) - {"causal"}:
+            if bad := set(flags) - {":causal"}:
                 raise CompileError(
-                    f"unknown attention flag(s): {' '.join(sorted(map(str, bad)))}"
+                    f"unknown attention flag(s): {' '.join(sorted(map(str, bad)))} "
+                    f"(flags use keyword syntax, e.g. :causal)"
                 )
-            return (*_compile_attention(name, dim, heads, "causal" in flags), name)
+            return (*_compile_attention(name, dim, heads, ":causal" in flags), name)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env, registry)
         case ["residual", sub_block]:
