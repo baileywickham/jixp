@@ -60,18 +60,18 @@ import jax.numpy as jnp
 
 HELPERS = {
     "dense": '''
-def init_dense(key, in_dim, out_dim):
+def _init_dense(key, in_dim, out_dim):
     W = jax.random.normal(key, (in_dim, out_dim)) * jnp.sqrt(2.0 / in_dim)
     b = jnp.zeros(out_dim)
     return W, b
 ''',
     "attention": '''
-def split_heads(x, heads):
+def _split_heads(x, heads):
     *batch, seq, dim = x.shape
     return x.reshape(*batch, seq, heads, dim // heads).swapaxes(-3, -2)
 
 
-def merge_heads(x):
+def _merge_heads(x):
     x = x.swapaxes(-3, -2)
     *batch, seq, heads, head_dim = x.shape
     return x.reshape(*batch, seq, heads * head_dim)
@@ -96,6 +96,17 @@ class _DimEnv(dict):
         if coeff and coeff.group(2) in self:
             return int(coeff.group(1)) * self[coeff.group(2)]
         raise KeyError(name)
+
+
+def _sub_name(parent, suffix):
+    """Derive the private (underscore-prefixed) name of an internal sub-block."""
+    base = parent if parent.startswith("_") else f"_{parent}"
+    return f"{base}_{suffix}"
+
+
+def _init_of(fn):
+    """Name of the init function paired with the apply function fn."""
+    return f"_init_{fn[1:]}" if fn.startswith("_") else f"init_{fn}"
 
 
 def _mangle(name):
@@ -148,7 +159,7 @@ def compile_source(source):
         if entry != mangled:
             block_defs = block_defs + [f'''
 def init_{mangled}(key):
-    return init_{entry}(key)
+    return {_init_of(entry)}(key)
 
 
 def {mangled}(params, x):
@@ -159,7 +170,12 @@ def {mangled}(params, x):
         helpers |= block_helpers
     if not defs:
         raise CompileError("no forms to compile")
-    parts = [HEADER]
+    public = [
+        fn for _, _, mangled in registry.values()
+        for fn in (f"init_{mangled}", mangled)
+    ]
+    exports = "\n".join(f'    "{fn}",' for fn in public)
+    parts = [HEADER, f"\n__all__ = [\n{exports}\n]\n"]
     for helper in ("dense", "attention"):
         if helper in helpers:
             parts.append(HELPERS[helper])
@@ -324,10 +340,10 @@ def _mlp_spec(args, dim_env):
 def _compile_mlp(name, dims, activation):
     n_layers = len(dims) - 1
     inits = ",\n        ".join(
-        f"init_dense(keys[{i}], {dims[i]}, {dims[i + 1]})" for i in range(n_layers)
+        f"_init_dense(keys[{i}], {dims[i]}, {dims[i + 1]})" for i in range(n_layers)
     )
     defs = f'''
-def init_{name}(key):
+def {_init_of(name)}(key):
     keys = jax.random.split(key, {n_layers})
     return [
         {inits},
@@ -345,7 +361,7 @@ def {name}(params, x):
 
 def _compile_layernorm(name, dim):
     defs = f'''
-def init_{name}(key):
+def {_init_of(name)}(key):
     return jnp.ones({dim}), jnp.zeros({dim})
 
 
@@ -367,26 +383,26 @@ def _compile_attention(name, dim, heads, causal):
     scores = jnp.where(mask, scores, -jnp.inf)
 '''
     defs = f'''
-def init_{name}(key):
+def {_init_of(name)}(key):
     keys = jax.random.split(key, 4)
     return [jax.random.normal(k, ({dim}, {dim})) * jnp.sqrt(1.0 / {dim}) for k in keys]
 
 
 def {name}(params, x):
     Wq, Wk, Wv, Wo = params
-    q = split_heads(x @ Wq, {heads})
-    k = split_heads(x @ Wk, {heads})
-    v = split_heads(x @ Wv, {heads})
+    q = _split_heads(x @ Wq, {heads})
+    k = _split_heads(x @ Wk, {heads})
+    v = _split_heads(x @ Wv, {heads})
     scores = q @ k.swapaxes(-1, -2) / jnp.sqrt({head_dim})
 {mask}    out = jax.nn.softmax(scores, axis=-1) @ v
-    return merge_heads(out) @ Wo
+    return _merge_heads(out) @ Wo
 '''
     return [defs], dim, dim, {"attention"}
 
 
 def _compile_residual(name, block, dim_env, registry):
     defs, sub_in, sub_out, helpers, entry = _compile_block(
-        f"{name}_inner", block, dim_env, registry
+        _sub_name(name, "inner"), block, dim_env, registry
     )
     if sub_in != sub_out:
         raise CompileError(
@@ -394,8 +410,8 @@ def _compile_residual(name, block, dim_env, registry):
             f"got {sub_in} -> {sub_out}"
         )
     defs = defs + [f'''
-def init_{name}(key):
-    return init_{entry}(key)
+def {_init_of(name)}(key):
+    return {_init_of(entry)}(key)
 
 
 def {name}(params, x):
@@ -406,7 +422,7 @@ def {name}(params, x):
 
 def _compile_repeat(name, count, block, dim_env, registry):
     defs, sub_in, sub_out, helpers, entry = _compile_block(
-        f"{name}_body", block, dim_env, registry
+        _sub_name(name, "body"), block, dim_env, registry
     )
     if sub_in != sub_out:
         raise CompileError(
@@ -414,8 +430,8 @@ def _compile_repeat(name, count, block, dim_env, registry):
             f"got {sub_in} -> {sub_out}"
         )
     defs = defs + [f'''
-def init_{name}(key):
-    return [init_{entry}(k) for k in jax.random.split(key, {count})]
+def {_init_of(name)}(key):
+    return [{_init_of(entry)}(k) for k in jax.random.split(key, {count})]
 
 
 def {name}(params, x):
@@ -433,7 +449,7 @@ def _compile_chain(name, blocks, dim_env, registry):
     entries = []
     for i, sub_block in enumerate(blocks):
         sub_defs, sub_in, sub_out, sub_helpers, entry = _compile_block(
-            f"{name}_layer{i}", sub_block, dim_env, registry
+            _sub_name(name, f"layer{i}"), sub_block, dim_env, registry
         )
         defs.extend(sub_defs)
         helpers |= sub_helpers
@@ -445,12 +461,12 @@ def _compile_chain(name, blocks, dim_env, registry):
                 f"chain dimension mismatch in {name}: layer {i} outputs "
                 f"{dims[i][1]} but layer {i + 1} expects {dims[i + 1][0]}"
             )
-    inits = ", ".join(f"init_{e}(keys[{i}])" for i, e in enumerate(entries))
+    inits = ", ".join(f"{_init_of(e)}(keys[{i}])" for i, e in enumerate(entries))
     applies = "\n".join(
         f"    x = {e}(params[{i}], x)" for i, e in enumerate(entries)
     )
     defs.append(f'''
-def init_{name}(key):
+def {_init_of(name)}(key):
     keys = jax.random.split(key, {len(blocks)})
     return [{inits}]
 

@@ -30,13 +30,19 @@ The output is readable, framework-free JAX — every `define` becomes a pair of
 functions, dims baked in as literals:
 
 ```python
+__all__ = [
+    "init_attn_block", "attn_block",
+    "init_ffn_block", "ffn_block",
+    "init_encoder", "encoder",
+]
+
 def init_encoder(key):
-    return [init_encoder_body(k) for k in jax.random.split(key, 4)]
+    return [_init_encoder_body(k) for k in jax.random.split(key, 4)]
 
 
 def encoder(params, x):
     for layer_params in params:
-        x = encoder_body(layer_params, x)
+        x = _encoder_body(layer_params, x)
     return x
 ```
 

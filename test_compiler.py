@@ -37,10 +37,10 @@ def test_layernorm_emits_scale_and_shift():
 
 def test_chain_emits_sublayers_and_threads_x():
     out = compile_source("(define model (chain (mlp 784 [256] 128) (layernorm 128)))")
-    assert "def model_layer0(params, x):" in out
-    assert "def model_layer1(params, x):" in out
-    assert "x = model_layer0(params[0], x)" in out
-    assert "x = model_layer1(params[1], x)" in out
+    assert "def _model_layer0(params, x):" in out
+    assert "def _model_layer1(params, x):" in out
+    assert "x = _model_layer0(params[0], x)" in out
+    assert "x = _model_layer1(params[1], x)" in out
     compile(out, "<generated>", "exec")
 
 
@@ -238,9 +238,9 @@ def test_attention_emits_projections_and_heads():
     out = compile_source("(define attn (attention 128 8))")
     assert "def init_attn(key):" in out
     assert "jax.random.split(key, 4)" in out
-    assert "split_heads(x @ Wq, 8)" in out
+    assert "_split_heads(x @ Wq, 8)" in out
     assert "jnp.sqrt(16)" in out
-    assert "def split_heads(x, heads):" in out
+    assert "def _split_heads(x, heads):" in out
     compile(out, "<generated>", "exec")
 
 
@@ -291,8 +291,8 @@ def test_attention_helpers_only_emitted_when_used():
 
 def test_residual_adds_input():
     out = compile_source("(define r (residual (layernorm 16)))")
-    assert "def r_inner(params, x):" in out
-    assert "return x + r_inner(params, x)" in out
+    assert "def _r_inner(params, x):" in out
+    assert "return x + _r_inner(params, x)" in out
     assert "def init_r(key):" in out
 
 
@@ -378,8 +378,8 @@ def test_residual_over_reference():
 def test_repeat_emits_body_once_and_loops():
     src = "(let-dim d 16) (define stack (repeat 3 (residual (layernorm d))))"
     out = compile_source(src)
-    assert out.count("def stack_body_inner(params, x):") == 1
-    assert "[init_stack_body(k) for k in jax.random.split(key, 3)]" in out
+    assert out.count("def _stack_body_inner(params, x):") == 1
+    assert "[_init_stack_body(k) for k in jax.random.split(key, 3)]" in out
     assert "for layer_params in params:" in out
 
 
@@ -482,3 +482,18 @@ def test_cli_usage_without_args():
     result = run_compiler()
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+def test_all_lists_only_public_pairs():
+    out = compile_source("(let-dim (d 8)) (define enc (mlp d [16] d)) (define stack (repeat 2 enc))")
+    assert '__all__ = [\n    "init_enc",\n    "enc",\n    "init_stack",\n    "stack",\n]' in out
+
+
+def test_internals_are_underscore_private():
+    out = compile_source("(define m (chain (mlp 8 [16] 8) (attention 8 2)))")
+    assert "def _init_dense(" in out
+    assert "def _split_heads(" in out
+    assert "def _m_layer0(params, x):" in out
+    assert "def _init_m_layer0(key):" in out
+    assert "def init_m(key):" in out
+    compile(out, "<generated>", "exec")
