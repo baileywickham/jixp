@@ -74,6 +74,49 @@ def test_empty_source_raises():
         compile_source("")
 
 
+def test_let_dim_binds_name_to_dim():
+    out = compile_source("(let-dim d 1024) (define m (mlp d (256) d))")
+    assert "init_dense(keys[0], 1024, 256)" in out
+    assert "init_dense(keys[1], 256, 1024)" in out
+    assert "let" not in out
+
+
+def test_let_dim_works_in_hidden_dims_and_layernorm():
+    out = compile_source(
+        "(let-dim h 64) (define m (chain (mlp 8 (h h) h) (layernorm h)))"
+    )
+    assert "init_dense(keys[0], 8, 64)" in out
+    assert "init_dense(keys[2], 64, 64)" in out
+    assert "jnp.ones(64), jnp.zeros(64)" in out
+
+
+def test_let_dim_can_reference_earlier_let_dim():
+    out = compile_source("(let-dim d 32) (let-dim e d) (define m (layernorm e))")
+    assert "jnp.ones(32), jnp.zeros(32)" in out
+
+
+def test_let_dim_participates_in_chain_dim_check():
+    with pytest.raises(CompileError, match="mismatch"):
+        compile_source(
+            "(let-dim d 4) (define m (chain (mlp 8 () d) (layernorm 5)))"
+        )
+
+
+def test_unbound_dim_raises():
+    with pytest.raises(CompileError, match="unbound dim 'd'"):
+        compile_source("(define m (mlp d () 4))")
+
+
+def test_duplicate_let_dim_raises():
+    with pytest.raises(CompileError, match="duplicate let-dim"):
+        compile_source("(let-dim d 4) (let-dim d 8) (define m (layernorm d))")
+
+
+def test_bad_let_dim_value_raises():
+    with pytest.raises(CompileError, match="expected a dim"):
+        compile_source("(let-dim d (4 5)) (define m (layernorm d))")
+
+
 def test_generated_module_runs_under_jax(tmp_path):
     jax = pytest.importorskip("jax")
     src = "(define model (chain (mlp 6 (5) 4) (layernorm 4)))"

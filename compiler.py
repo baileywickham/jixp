@@ -1,13 +1,16 @@
 """Compile jisp's JAX DSL to a Python module of pure-JAX functions.
 
-DSL (one or more top-level defines):
+DSL (top-level forms):
 
+    (let-dim <name> <dim>)           bind a name to a dimension at compile time
     (define <name> <block>)
 
 Blocks:
     (mlp <in> (<hidden>...) <out>)   dense layers with relu between them
     (layernorm <dim>)
     (chain <block> <block>...)       sequential composition
+
+A <dim> is an int literal or a name bound by an earlier let-dim.
 
 Each define compiles to a pair of functions in the output module:
 init_<name>(key) building a params pytree, and <name>(params, x).
@@ -42,18 +45,25 @@ def compile_source(source):
     defs = []
     uses_dense = False
     names = set()
+    dim_env = {}
     for form in parse(source):
         match form:
+            case ["let-dim", str() as name, value] if name.isidentifier():
+                if name in dim_env:
+                    raise CompileError(f"duplicate let-dim: {name}")
+                dim_env[name] = _resolve_dim(value, dim_env)
+                continue
             case ["define", str() as name, block] if name.isidentifier():
                 pass
             case _:
                 raise CompileError(
-                    f"top-level form must be (define <name> <block>), got {form!r}"
+                    "top-level form must be (define <name> <block>) or "
+                    f"(let-dim <name> <dim>), got {form!r}"
                 )
         if name in names:
             raise CompileError(f"duplicate define: {name}")
         names.add(name)
-        block_defs, _, _, block_dense = _compile_block(name, block)
+        block_defs, _, _, block_dense = _compile_block(name, block, dim_env)
         defs.extend(block_defs)
         uses_dense = uses_dense or block_dense
     if not defs:
@@ -65,27 +75,37 @@ def compile_source(source):
     return "\n".join(parts)
 
 
-def _compile_block(name, block):
+def _resolve_dim(value, dim_env):
+    """Resolve a dim spec (int literal or let-dim name) to an int."""
+    match value:
+        case int():
+            return value
+        case str() if value in dim_env:
+            return dim_env[value]
+        case str():
+            raise CompileError(f"unbound dim '{value}'")
+    raise CompileError(f"expected a dim (int or let-dim name), got {value!r}")
+
+
+def _compile_block(name, block, dim_env):
     """Compile one block; return (defs, in_dim, out_dim, uses_dense)."""
     match block:
         case ["mlp", *args]:
-            return _compile_mlp(name, _mlp_dims(args))
-        case ["layernorm", int() as dim]:
-            return _compile_layernorm(name, dim)
+            return _compile_mlp(name, _mlp_dims(args, dim_env))
+        case ["layernorm", dim]:
+            return _compile_layernorm(name, _resolve_dim(dim, dim_env))
         case ["chain", *blocks] if blocks:
-            return _compile_chain(name, blocks)
+            return _compile_chain(name, blocks, dim_env)
         case _:
             raise CompileError(f"unknown block: {block!r}")
 
 
-def _mlp_dims(args):
+def _mlp_dims(args, dim_env):
     match args:
-        case [int() as in_dim, [*hidden], int() as out_dim] if all(
-            isinstance(h, int) for h in hidden
-        ):
-            return [in_dim, *hidden, out_dim]
+        case [in_dim, [*hidden], out_dim]:
+            return [_resolve_dim(d, dim_env) for d in (in_dim, *hidden, out_dim)]
     raise CompileError(
-        f"mlp expects (mlp <in> (<hidden>...) <out>) with int dims, got {args!r}"
+        f"mlp expects (mlp <in> (<hidden>...) <out>), got {args!r}"
     )
 
 
@@ -126,14 +146,16 @@ def {name}(params, x):
     return [defs], dim, dim, False
 
 
-def _compile_chain(name, blocks):
+def _compile_chain(name, blocks, dim_env):
     defs = []
     uses_dense = False
     dims = []
     sub_names = []
     for i, sub_block in enumerate(blocks):
         sub_name = f"{name}_layer{i}"
-        sub_defs, sub_in, sub_out, sub_dense = _compile_block(sub_name, sub_block)
+        sub_defs, sub_in, sub_out, sub_dense = _compile_block(
+            sub_name, sub_block, dim_env
+        )
         defs.extend(sub_defs)
         uses_dense = uses_dense or sub_dense
         dims.append((sub_in, sub_out))
