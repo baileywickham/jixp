@@ -6,7 +6,7 @@ import pytest
 
 from compiler import CompileError, compile_source
 
-MLP_SRC = "(define model (mlp 784 (256 256) 10))"
+MLP_SRC = "(define model (mlp 784 [256 256] 10))"
 
 
 def test_mlp_emits_init_and_apply():
@@ -23,7 +23,7 @@ def test_generated_source_is_valid_python():
 
 
 def test_mlp_with_no_hidden_layers():
-    out = compile_source("(define lin (mlp 8 () 4))")
+    out = compile_source("(define lin (mlp 8 [] 4))")
     assert "jax.random.split(key, 1)" in out
     assert "init_dense(keys[0], 8, 4)" in out
 
@@ -36,7 +36,7 @@ def test_layernorm_emits_scale_and_shift():
 
 
 def test_chain_emits_sublayers_and_threads_x():
-    out = compile_source("(define model (chain (mlp 784 (256) 128) (layernorm 128)))")
+    out = compile_source("(define model (chain (mlp 784 [256] 128) (layernorm 128)))")
     assert "def model_layer0(params, x):" in out
     assert "def model_layer1(params, x):" in out
     assert "x = model_layer0(params[0], x)" in out
@@ -46,7 +46,7 @@ def test_chain_emits_sublayers_and_threads_x():
 
 def test_chain_dimension_mismatch_raises():
     with pytest.raises(CompileError, match="mismatch"):
-        compile_source("(define m (chain (mlp 8 () 4) (layernorm 5)))")
+        compile_source("(define m (chain (mlp 8 [] 4) (layernorm 5)))")
 
 
 def test_top_level_must_be_define():
@@ -75,7 +75,7 @@ def test_empty_source_raises():
 
 
 def test_let_dim_binds_name_to_dim():
-    out = compile_source("(let-dim d 1024) (define m (mlp d (256) d))")
+    out = compile_source("(let-dim d 1024) (define m (mlp d [256] d))")
     assert "init_dense(keys[0], 1024, 256)" in out
     assert "init_dense(keys[1], 256, 1024)" in out
     assert "let" not in out
@@ -83,7 +83,7 @@ def test_let_dim_binds_name_to_dim():
 
 def test_let_dim_works_in_hidden_dims_and_layernorm():
     out = compile_source(
-        "(let-dim h 64) (define m (chain (mlp 8 (h h) h) (layernorm h)))"
+        "(let-dim h 64) (define m (chain (mlp 8 [h h] h) (layernorm h)))"
     )
     assert "init_dense(keys[0], 8, 64)" in out
     assert "init_dense(keys[2], 64, 64)" in out
@@ -98,13 +98,13 @@ def test_let_dim_can_reference_earlier_let_dim():
 def test_let_dim_participates_in_chain_dim_check():
     with pytest.raises(CompileError, match="mismatch"):
         compile_source(
-            "(let-dim d 4) (define m (chain (mlp 8 () d) (layernorm 5)))"
+            "(let-dim d 4) (define m (chain (mlp 8 [] d) (layernorm 5)))"
         )
 
 
 def test_unbound_dim_raises():
-    with pytest.raises(CompileError, match="unbound dim 'd'"):
-        compile_source("(define m (mlp d () 4))")
+    with pytest.raises(CompileError, match="unbound symbol 'd'"):
+        compile_source("(define m (mlp d [] 4))")
 
 
 def test_duplicate_let_dim_raises():
@@ -113,13 +113,92 @@ def test_duplicate_let_dim_raises():
 
 
 def test_bad_let_dim_value_raises():
-    with pytest.raises(CompileError, match="expected a dim"):
+    with pytest.raises(CompileError, match="bad dim"):
         compile_source("(let-dim d (4 5)) (define m (layernorm d))")
+
+
+def test_paren_hidden_dims_give_migration_error():
+    with pytest.raises(CompileError, match=r"bracket tuple like \[256 256\]"):
+        compile_source("(define m (mlp 784 (256 256) 10))")
+
+
+def test_dim_arithmetic_expression():
+    out = compile_source("(let-dim d 32) (define m (mlp d [(* 2 d)] (- d 24)))")
+    assert "init_dense(keys[0], 32, 64)" in out
+    assert "init_dense(keys[1], 64, 8)" in out
+
+
+def test_let_dim_expression_value():
+    out = compile_source("(let-dim d 32) (let-dim ffn (* 4 d)) (define m (layernorm ffn))")
+    assert "jnp.ones(128), jnp.zeros(128)" in out
+
+
+def test_coefficient_sugar():
+    out = compile_source("(let-dim d 32) (define m (mlp d [4d] d))")
+    assert "init_dense(keys[0], 32, 128)" in out
+
+
+def test_coefficient_sugar_inside_expression():
+    out = compile_source("(let-dim d 16) (define m (layernorm (+ 2d 1d)))")
+    assert "jnp.ones(48), jnp.zeros(48)" in out
+
+
+def test_integral_division_dim():
+    out = compile_source("(let-dim d 32) (define m (layernorm (/ d 4)))")
+    assert "jnp.ones(8), jnp.zeros(8)" in out
+
+
+def test_non_integral_dim_raises():
+    with pytest.raises(CompileError, match="positive int"):
+        compile_source("(define m (layernorm (/ 5 2)))")
+
+
+def test_attention_emits_projections_and_heads():
+    out = compile_source("(define attn (attention 128 8))")
+    assert "def init_attn(key):" in out
+    assert "jax.random.split(key, 4)" in out
+    assert "split_heads(x @ Wq, 8)" in out
+    assert "jnp.sqrt(16)" in out
+    assert "def split_heads(x, heads):" in out
+    compile(out, "<generated>", "exec")
+
+
+def test_attention_heads_must_divide_dim():
+    with pytest.raises(CompileError, match="not divisible"):
+        compile_source("(define attn (attention 128 7))")
+
+
+def test_attention_helpers_only_emitted_when_used():
+    assert "split_heads" not in compile_source("(define m (layernorm 4))")
+
+
+def test_residual_adds_input():
+    out = compile_source("(define r (residual (layernorm 16)))")
+    assert "def r_inner(params, x):" in out
+    assert "return x + r_inner(params, x)" in out
+    assert "def init_r(key):" in out
+
+
+def test_residual_requires_matching_dims():
+    with pytest.raises(CompileError, match="residual requires matching"):
+        compile_source("(define r (residual (mlp 8 [] 4)))")
+
+
+def test_transformer_block_compiles():
+    src = """
+    (let-dim d 64)
+    (define block (chain
+      (residual (chain (layernorm d) (attention d 4)))
+      (residual (chain (layernorm d) (mlp d [4d] d)))))
+    """
+    out = compile_source(src)
+    assert "init_dense" in out and "split_heads" in out
+    compile(out, "<generated>", "exec")
 
 
 def test_generated_module_runs_under_jax(tmp_path):
     jax = pytest.importorskip("jax")
-    src = "(define model (chain (mlp 6 (5) 4) (layernorm 4)))"
+    src = "(define model (chain (mlp 6 [5] 4) (layernorm 4)))"
     mod_path = tmp_path / "gen_model.py"
     mod_path.write_text(compile_source(src))
     spec = importlib.util.spec_from_file_location("gen_model", mod_path)
@@ -130,6 +209,26 @@ def test_generated_module_runs_under_jax(tmp_path):
     assert y.shape == (3, 4)
 
 
+def test_generated_transformer_block_runs_under_jax(tmp_path):
+    jax = pytest.importorskip("jax")
+    src = """
+    (let-dim d 16)
+    (define block (chain
+      (residual (chain (layernorm d) (attention d 4)))
+      (residual (chain (layernorm d) (mlp d [4d] d)))))
+    """
+    mod_path = tmp_path / "gen_block.py"
+    mod_path.write_text(compile_source(src))
+    spec = importlib.util.spec_from_file_location("gen_block", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    params = mod.init_block(jax.random.PRNGKey(0))
+    x = jax.random.normal(jax.random.PRNGKey(1), (2, 7, 16))
+    y = mod.block(params, x)
+    assert y.shape == (2, 7, 16)
+    assert not jax.numpy.allclose(y, x)
+
+
 def run_compiler(*argv):
     return subprocess.run(
         [sys.executable, "compiler.py", *argv], capture_output=True, text=True
@@ -138,7 +237,7 @@ def run_compiler(*argv):
 
 def test_cli_writes_python_file_next_to_input(tmp_path):
     src = tmp_path / "model.lisp"
-    src.write_text("(define model (mlp 4 (8) 2))")
+    src.write_text("(define model (mlp 4 [8] 2))")
     result = run_compiler(str(src))
     out = tmp_path / "model.py"
     assert result.returncode == 0

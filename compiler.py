@@ -6,20 +6,26 @@ DSL (top-level forms):
     (define <name> <block>)
 
 Blocks:
-    (mlp <in> (<hidden>...) <out>)   dense layers with relu between them
+    (mlp <in> [<hidden>...] <out>)   dense layers with relu between them
     (layernorm <dim>)
+    (attention <dim> <heads>)        multi-head self-attention over (..., seq, dim)
     (chain <block> <block>...)       sequential composition
+    (residual <block>)               x + block(x); block must preserve dim
 
-A <dim> is an int literal or a name bound by an earlier let-dim.
+A <dim> is a compile-time expression evaluated by the jisp interpreter:
+an int literal, a let-dim name, arithmetic like (* 4 d), or coefficient
+sugar like 4d (meaning (* 4 d)). Brackets [...] are data tuples, used for
+mlp hidden dims.
 
 Each define compiles to a pair of functions in the output module:
 init_<name>(key) building a params pytree, and <name>(params, x).
 """
 
+import re
 import sys
 from pathlib import Path
 
-from jisp import ParseError, parse
+from jisp import EvalError, ParseError, evaluate, parse, standard_env
 
 
 class CompileError(Exception):
@@ -32,20 +38,43 @@ import jax
 import jax.numpy as jnp
 '''
 
-INIT_DENSE = '''
+HELPERS = {
+    "dense": '''
 def init_dense(key, in_dim, out_dim):
     W = jax.random.normal(key, (in_dim, out_dim)) * jnp.sqrt(2.0 / in_dim)
     b = jnp.zeros(out_dim)
     return W, b
-'''
+''',
+    "attention": '''
+def split_heads(x, heads):
+    *batch, seq, dim = x.shape
+    return x.reshape(*batch, seq, heads, dim // heads).swapaxes(-3, -2)
+
+
+def merge_heads(x):
+    x = x.swapaxes(-3, -2)
+    *batch, seq, heads, head_dim = x.shape
+    return x.reshape(*batch, seq, heads * head_dim)
+''',
+}
+
+
+class _DimEnv(dict):
+    """Evaluator env for dims: builtins + let-dim bindings + 4d sugar."""
+
+    def __missing__(self, name):
+        coeff = re.fullmatch(r"(\d+)([A-Za-z_]\w*)", name)
+        if coeff and coeff.group(2) in self:
+            return int(coeff.group(1)) * self[coeff.group(2)]
+        raise KeyError(name)
 
 
 def compile_source(source):
     """Compile jisp DSL source to Python module source."""
     defs = []
-    uses_dense = False
+    helpers = set()
     names = set()
-    dim_env = {}
+    dim_env = _DimEnv(standard_env())
     for form in parse(source):
         match form:
             case ["let-dim", str() as name, value] if name.isidentifier():
@@ -63,49 +92,66 @@ def compile_source(source):
         if name in names:
             raise CompileError(f"duplicate define: {name}")
         names.add(name)
-        block_defs, _, _, block_dense = _compile_block(name, block, dim_env)
+        block_defs, _, _, block_helpers = _compile_block(name, block, dim_env)
         defs.extend(block_defs)
-        uses_dense = uses_dense or block_dense
+        helpers |= block_helpers
     if not defs:
         raise CompileError("no forms to compile")
     parts = [HEADER]
-    if uses_dense:
-        parts.append(INIT_DENSE)
+    for helper in ("dense", "attention"):
+        if helper in helpers:
+            parts.append(HELPERS[helper])
     parts.extend(defs)
     return "\n".join(parts)
 
 
-def _resolve_dim(value, dim_env):
-    """Resolve a dim spec (int literal or let-dim name) to an int."""
-    match value:
-        case int():
-            return value
-        case str() if value in dim_env:
-            return dim_env[value]
-        case str():
-            raise CompileError(f"unbound dim '{value}'")
-    raise CompileError(f"expected a dim (int or let-dim name), got {value!r}")
+def _resolve_dim(form, dim_env):
+    """Evaluate a dim expression to a positive int."""
+    try:
+        value = evaluate(form, dim_env)
+    except EvalError as exc:
+        raise CompileError(f"bad dim {form!r}: {exc}") from None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if not isinstance(value, int) or value <= 0:
+        raise CompileError(f"dim must be a positive int, got {value!r} from {form!r}")
+    return value
 
 
 def _compile_block(name, block, dim_env):
-    """Compile one block; return (defs, in_dim, out_dim, uses_dense)."""
+    """Compile one block; return (defs, in_dim, out_dim, helpers)."""
     match block:
         case ["mlp", *args]:
             return _compile_mlp(name, _mlp_dims(args, dim_env))
         case ["layernorm", dim]:
             return _compile_layernorm(name, _resolve_dim(dim, dim_env))
+        case ["attention", dim_form, heads_form]:
+            dim = _resolve_dim(dim_form, dim_env)
+            heads = _resolve_dim(heads_form, dim_env)
+            if dim % heads:
+                raise CompileError(
+                    f"attention dim {dim} is not divisible by heads {heads}"
+                )
+            return _compile_attention(name, dim, heads)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env)
+        case ["residual", sub_block]:
+            return _compile_residual(name, sub_block, dim_env)
         case _:
             raise CompileError(f"unknown block: {block!r}")
 
 
 def _mlp_dims(args, dim_env):
     match args:
-        case [in_dim, [*hidden], out_dim]:
+        case [in_dim, tuple() as hidden, out_dim]:
             return [_resolve_dim(d, dim_env) for d in (in_dim, *hidden, out_dim)]
+        case [_, list() as hidden, _]:
+            raise CompileError(
+                f"mlp hidden dims must be a bracket tuple like [256 256], "
+                f"got ({' '.join(map(str, hidden))})"
+            )
     raise CompileError(
-        f"mlp expects (mlp <in> (<hidden>...) <out>), got {args!r}"
+        f"mlp expects (mlp <in> [<hidden>...] <out>), got {args!r}"
     )
 
 
@@ -128,7 +174,7 @@ def {name}(params, x):
     W, b = params[-1]
     return x @ W + b
 '''
-    return [defs], dims[0], dims[-1], True
+    return [defs], dims[0], dims[-1], {"dense"}
 
 
 def _compile_layernorm(name, dim):
@@ -143,21 +189,60 @@ def {name}(params, x):
     var = x.var(axis=-1, keepdims=True)
     return scale * (x - mean) / jnp.sqrt(var + 1e-5) + shift
 '''
-    return [defs], dim, dim, False
+    return [defs], dim, dim, set()
+
+
+def _compile_attention(name, dim, heads):
+    head_dim = dim // heads
+    defs = f'''
+def init_{name}(key):
+    keys = jax.random.split(key, 4)
+    return [jax.random.normal(k, ({dim}, {dim})) * jnp.sqrt(1.0 / {dim}) for k in keys]
+
+
+def {name}(params, x):
+    Wq, Wk, Wv, Wo = params
+    q = split_heads(x @ Wq, {heads})
+    k = split_heads(x @ Wk, {heads})
+    v = split_heads(x @ Wv, {heads})
+    scores = q @ k.swapaxes(-1, -2) / jnp.sqrt({head_dim})
+    out = jax.nn.softmax(scores, axis=-1) @ v
+    return merge_heads(out) @ Wo
+'''
+    return [defs], dim, dim, {"attention"}
+
+
+def _compile_residual(name, block, dim_env):
+    sub_name = f"{name}_inner"
+    defs, sub_in, sub_out, helpers = _compile_block(sub_name, block, dim_env)
+    if sub_in != sub_out:
+        raise CompileError(
+            f"residual requires matching in/out dims in {name}, "
+            f"got {sub_in} -> {sub_out}"
+        )
+    defs.append(f'''
+def init_{name}(key):
+    return init_{sub_name}(key)
+
+
+def {name}(params, x):
+    return x + {sub_name}(params, x)
+''')
+    return defs, sub_in, sub_out, helpers
 
 
 def _compile_chain(name, blocks, dim_env):
     defs = []
-    uses_dense = False
+    helpers = set()
     dims = []
     sub_names = []
     for i, sub_block in enumerate(blocks):
         sub_name = f"{name}_layer{i}"
-        sub_defs, sub_in, sub_out, sub_dense = _compile_block(
+        sub_defs, sub_in, sub_out, sub_helpers = _compile_block(
             sub_name, sub_block, dim_env
         )
         defs.extend(sub_defs)
-        uses_dense = uses_dense or sub_dense
+        helpers |= sub_helpers
         dims.append((sub_in, sub_out))
         sub_names.append(sub_name)
     for i in range(len(dims) - 1):
@@ -180,7 +265,7 @@ def {name}(params, x):
 {applies}
     return x
 ''')
-    return defs, dims[0][0], dims[-1][1], uses_dense
+    return defs, dims[0][0], dims[-1][1], helpers
 
 
 def main():

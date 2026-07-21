@@ -15,8 +15,10 @@ class EvalError(Exception):
 
 
 def tokenize(source):
-    """Split Lisp source into paren and atom tokens."""
-    return source.replace("(", " ( ").replace(")", " ) ").split()
+    """Split Lisp source into paren, bracket, and atom tokens."""
+    for delim in "()[]":
+        source = source.replace(delim, f" {delim} ")
+    return source.split()
 
 
 def parse_atom(token):
@@ -43,30 +45,49 @@ def parse(source):
 
 
 def _read_form(tokens, pos):
-    """Read one form starting at tokens[pos]; return (form, next_pos)."""
+    """Read one form starting at tokens[pos]; return (form, next_pos).
+
+    Parens read as forms (Python lists); brackets read as data tuples.
+    """
     token = tokens[pos]
-    if token == "(":
+    if token in ("(", "["):
+        closer = ")" if token == "(" else "]"
         items = []
         pos += 1
         while True:
             if pos >= len(tokens):
-                raise ParseError("unclosed '('")
-            if tokens[pos] == ")":
-                return items, pos + 1
+                raise ParseError(f"unclosed '{token}'")
+            if tokens[pos] in (")", "]"):
+                if tokens[pos] != closer:
+                    raise ParseError(f"'{token}' closed by '{tokens[pos]}'")
+                return (items if closer == ")" else tuple(items)), pos + 1
             item, pos = _read_form(tokens, pos)
             items.append(item)
-    if token == ")":
-        raise ParseError("unexpected ')'")
+    if token in (")", "]"):
+        raise ParseError(f"unexpected '{token}'")
     return parse_atom(token), pos + 1
+
+
+count = 0
+
+
+def var(prefix):
+    global count
+    count += 1
+    return f"{prefix}{count}"
 
 
 def standard_env():
     """Build a fresh global environment with the builtin procedures."""
     return {
         "+": lambda *args: sum(args),
-        "-": lambda first, *rest: -first if not rest else reduce(operator.sub, rest, first),
+        "-": lambda first, *rest: (
+            -first if not rest else reduce(operator.sub, rest, first)
+        ),
         "*": lambda *args: reduce(operator.mul, args, 1),
-        "/": lambda first, *rest: 1 / first if not rest else reduce(operator.truediv, rest, first),
+        "/": lambda first, *rest: (
+            1 / first if not rest else reduce(operator.truediv, rest, first)
+        ),
         "<": operator.lt,
         ">": operator.gt,
         "<=": operator.le,
@@ -85,6 +106,10 @@ def evaluate(form, env):
                 return env[name]
             except KeyError:
                 raise EvalError(f"unbound symbol '{name}'") from None
+        case tuple():
+            # Bracket literals are data: evaluate elements, keep the tuple.
+            # Must precede the list patterns below, which also match tuples.
+            return tuple(evaluate(item, env) for item in form)
         case ["quote", quoted]:
             return quoted
         case ["if", test, then, alt]:
@@ -92,12 +117,14 @@ def evaluate(form, env):
         case ["define", str() as name, value]:
             env[name] = evaluate(value, env)
         case ["lambda", [*params], body]:
+
             def procedure(*args):
                 if len(args) != len(params):
                     raise EvalError(
                         f"expected {len(params)} arguments, got {len(args)}"
                     )
                 return evaluate(body, {**env, **dict(zip(params, args))})
+
             return procedure
         case [op, *args]:
             fn = evaluate(op, env)

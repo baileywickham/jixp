@@ -81,6 +81,37 @@ def test_parse_unclosed_open_paren():
         parse("(a (b)")
 
 
+def test_parse_brackets_give_tuples():
+    assert parse("[1 2]") == [(1, 2)]
+
+
+def test_parse_brackets_nest_inside_forms():
+    assert parse("(mlp 8 [16 x] 4)") == [["mlp", 8, (16, "x"), 4]]
+
+
+def test_parse_empty_brackets():
+    assert parse("[]") == [()]
+
+
+def test_parse_unclosed_bracket():
+    with pytest.raises(ParseError, match=r"unclosed '\['"):
+        parse("[1 2")
+
+
+def test_parse_unexpected_close_bracket():
+    with pytest.raises(ParseError, match=r"unexpected '\]'"):
+        parse("]")
+
+
+def test_parse_mismatched_delimiters():
+    with pytest.raises(ParseError, match=r"'\(' closed by '\]'"):
+        parse("(a]")
+
+
+def test_eval_tuple_literal_evaluates_elements():
+    assert run("[1 (+ 1 1) (quote a)]") == (1, 2, "a")
+
+
 def run(source):
     """Parse and evaluate source in a fresh env; return the last result."""
     return exec(parse(source))
