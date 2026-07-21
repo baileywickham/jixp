@@ -3,7 +3,16 @@ import sys
 
 import pytest
 
-from jisp import ParseError, parse, parse_atom, tokenize
+from jisp import (
+    EvalError,
+    ParseError,
+    evaluate,
+    exec,
+    parse,
+    parse_atom,
+    standard_env,
+    tokenize,
+)
 
 
 def test_tokenize_pads_parens_and_splits():
@@ -72,18 +81,105 @@ def test_parse_unclosed_open_paren():
         parse("(a (b)")
 
 
+def run(source):
+    """Parse and evaluate source in a fresh env; return the last result."""
+    return exec(parse(source))
+
+
+def test_eval_number_self_evaluates():
+    assert evaluate(42, {}) == 42
+
+
+def test_eval_symbol_lookup():
+    assert evaluate("x", {"x": 3}) == 3
+
+
+def test_eval_unbound_symbol_raises():
+    with pytest.raises(EvalError, match="unbound symbol 'x'"):
+        evaluate("x", {})
+
+
+def test_eval_quote_returns_form_unevaluated():
+    assert run("(quote (add 1 2))") == ["add", 1, 2]
+
+
+def test_eval_if_true_branch():
+    assert run("(if (< 1 2) 10 20)") == 10
+
+
+def test_eval_if_false_branch():
+    assert run("(if (> 1 2) 10 20)") == 20
+
+
+def test_eval_define_binds_in_env():
+    assert run("(define x 3) (+ x 4)") == 7
+
+
+def test_eval_variadic_arithmetic():
+    assert run("(- (+ 1 2 3) (* 2 2))") == 2
+
+
+def test_eval_division():
+    assert run("(/ 10 4)") == 2.5
+
+
+def test_eval_lambda_call():
+    assert run("((lambda (x y) (+ x y)) 3 4)") == 7
+
+
+def test_eval_recursion_via_define():
+    src = """
+    (define fact (lambda (n) (if (< n 2) 1 (* n (fact (- n 1))))))
+    (fact 5)
+    """
+    assert run(src) == 120
+
+
+def test_eval_lambda_arity_mismatch_raises():
+    with pytest.raises(EvalError, match="expected 2 arguments, got 1"):
+        run("((lambda (x y) x) 1)")
+
+
+def test_eval_calling_non_function_raises():
+    with pytest.raises(EvalError, match="not callable"):
+        run("(1 2)")
+
+
+def test_eval_empty_list_raises():
+    with pytest.raises(EvalError, match="cannot evaluate"):
+        run("()")
+
+
+def test_exec_returns_none_for_no_forms():
+    assert exec([]) is None
+
+
+def test_exec_shares_env_across_forms():
+    env = standard_env()
+    exec(parse("(define x 1)"), env)
+    assert exec(parse("(+ x 1)"), env) == 2
+
+
 def run_cli(*argv):
     return subprocess.run(
         [sys.executable, "jisp.py", *argv], capture_output=True, text=True
     )
 
 
-def test_cli_parses_file(tmp_path):
+def test_cli_evaluates_file(tmp_path):
     src = tmp_path / "prog.lisp"
-    src.write_text("(add 1 2)\n(sub 3 4)\n")
+    src.write_text("(define x 3)\n(+ x 4)\n(quote (a b))\n")
     result = run_cli(str(src))
     assert result.returncode == 0
-    assert result.stdout == "['add', 1, 2]\n['sub', 3, 4]\n"
+    assert result.stdout == "7\n['a', 'b']\n"
+
+
+def test_cli_eval_error_goes_to_stderr(tmp_path):
+    src = tmp_path / "bad.lisp"
+    src.write_text("(boom 1)")
+    result = run_cli(str(src))
+    assert result.returncode == 1
+    assert "unbound symbol 'boom'" in result.stderr
 
 
 def test_cli_parse_error_goes_to_stderr(tmp_path):
