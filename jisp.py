@@ -1,5 +1,8 @@
 """jisp: a minimal Lisp s-expression parser."""
 
+import sys
+from pprint import pprint
+
 
 class ParseError(Exception):
     """Raised when source text is not a valid s-expression."""
@@ -49,3 +52,22 @@ def _read_form(tokens, pos):
     if token == ")":
         raise ParseError("unexpected ')'")
     return parse_atom(token), pos + 1
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: python jisp.py file.lisp", file=sys.stderr)
+        sys.exit(2)
+    with open(sys.argv[1]) as f:
+        source = f.read()
+    try:
+        forms = parse(source)
+    except ParseError as exc:
+        print(f"parse error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    for form in forms:
+        pprint(form)
+
+
+if __name__ == "__main__":
+    main()
