@@ -1,0 +1,12 @@
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+
+# generated output (rebuild with: python compiler.py examples/<name>.lisp)
+examples/*.py
+
+# agent scratch
+.superpowers/

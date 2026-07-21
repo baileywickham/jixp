@@ -68,15 +68,6 @@ def _read_form(tokens, pos):
     return parse_atom(token), pos + 1
 
 
-count = 0
-
-
-def var(prefix):
-    global count
-    count += 1
-    return f"{prefix}{count}"
-
-
 def standard_env():
     """Build a fresh global environment with the builtin procedures."""
     return {

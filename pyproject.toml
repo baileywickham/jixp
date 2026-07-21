@@ -1,0 +1,14 @@
+[project]
+name = "jisp"
+version = "0.1.0"
+description = "A tiny Lisp that compiles neural network definitions to pure-JAX Python"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "jax"]
+
+[tool.pytest.ini_options]
+testpaths = ["test_jisp.py", "test_compiler.py"]
