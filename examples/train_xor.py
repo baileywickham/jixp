@@ -7,14 +7,10 @@ The generated module (xor.py) is plain JAX, so jit/grad/tree_map all
 apply directly; jisp itself is not needed at runtime.
 """
 
-import sys
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
 
-sys.path.insert(0, str(Path(__file__).parent))
-import xor  # the generated module
+import xor  # the generated module (lives next to this script)
 
 X = jnp.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=jnp.float32)
 Y = jnp.array([[0.0], [1.0], [1.0], [0.0]])
