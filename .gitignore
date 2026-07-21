@@ -5,8 +5,9 @@ __pycache__/
 venv/
 .venv/
 
-# generated output (rebuild with: python compiler.py examples/<name>.lisp)
+# generated output (rebuild with: python compiler.py examples/<name>.jisp)
 examples/*.py
+!examples/train_xor.py
 
 # agent scratch
 .superpowers/

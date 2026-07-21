@@ -47,6 +47,43 @@ params = t.init_encoder(jax.random.PRNGKey(0))
 y = t.encoder(params, x)          # x: (batch, seq, 128)
 ```
 
+## Workflow
+
+Write the `.jisp`, compile it, and import the generated module into ordinary
+JAX code — jisp is a build step, never a runtime dependency. A complete
+train-XOR example lives in `examples/`:
+
+```lisp
+; examples/xor.jisp
+(define net (mlp 2 [8 8] 1 :activation tanh))
+```
+
+```python
+# examples/train_xor.py (abridged)
+import xor                                    # the generated module
+
+params = xor.init_net(jax.random.PRNGKey(0))
+
+def loss_fn(params):
+    return jnp.mean((xor.net(params, X) - Y) ** 2)
+
+@jax.jit
+def step(params):
+    loss, grads = jax.value_and_grad(loss_fn)(params)
+    return jax.tree.map(lambda p, g: p - 0.1 * g, params, grads), loss
+```
+
+```console
+$ python compiler.py examples/xor.jisp
+$ uv run --with jax python examples/train_xor.py
+step    0  loss 1.472630
+step 2000  loss 0.000000
+predictions: [0.0, 1.0, 1.0, 0.0]
+```
+
+Params are ordinary pytrees and the generated functions are pure, so `jit`,
+`grad`, `vmap`, optax optimizers, and orbax checkpointing all apply directly.
+
 ## The DSL
 
 Top-level forms:

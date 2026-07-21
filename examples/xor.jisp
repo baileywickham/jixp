@@ -1,0 +1,1 @@
+(define net (mlp 2 [8 8] 1 :activation tanh))
