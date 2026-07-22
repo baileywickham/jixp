@@ -100,11 +100,16 @@ wrote examples/lm/lm.model.json
 wrote examples/lm/lm.html
 ```
 
+![flow view](docs/screenshots/viewer-flow.jpg)
+
 `--viz` writes a self-contained interactive HTML explorer (no dependencies, no
 server): a collapsible tree with one node per *source* block — `repeat` is a
 single node with multiplied params — so it stays small for arbitrarily large
 models. Each node shows its dims, exact parameter count (computed statically),
-and share-of-model meter; light/dark themes included. `--json` writes the same
+and share-of-model meter; light/dark themes included. Three views: a
+collapsible **tree**, a **flow** diagram (residuals drawn as skip
+connections into a ⊕ merge, `repeat` as a dashed ×N container), and an
+**icicle** param map where width is parameter share. `--json` writes the same
 structural summary as plain JSON for your own tooling, and it's also embedded
 in the HTML. The counts are exact: a test asserts they equal what `init_*`
 actually allocates under JAX.
