@@ -91,6 +91,28 @@ _TEMPLATE = """<!doctype html>
   .share { color: var(--muted); font-size: 12px; }
   .params { color: var(--ink-2); font-size: 12.5px; }
   .children { margin-left: 22px; border-left: 1px solid var(--grid); padding-left: 8px; }
+  .ref-link {
+    color: var(--accent); font-weight: 600; cursor: pointer;
+    text-decoration: underline dotted; text-underline-offset: 3px;
+  }
+  .residual-wrap {
+    border: 1px solid color-mix(in srgb, var(--k-residual) 35%, transparent);
+    background: color-mix(in srgb, var(--k-residual) 5%, transparent);
+    border-radius: 8px; padding: 2px 8px 4px; margin: 5px 0;
+  }
+  .residual-tag {
+    display: flex; align-items: center; gap: 7px;
+    color: var(--ink-2); font-size: 11.5px; padding: 3px 6px 2px;
+  }
+  .residual-tag .sum {
+    margin-left: auto; color: var(--muted); font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  @keyframes flash {
+    0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
+    100% { box-shadow: 0 0 0 3px transparent; }
+  }
+  .flash { animation: flash 1.2s ease-out; }
   footer { color: var(--muted); font-size: 12px; margin-top: 18px; }
 </style>
 </head>
@@ -126,7 +148,7 @@ const detail = n => {
     case 'chain': return `<span class="dims">${n.in} \\u2192 ${n.out} \\u00b7 ${n.children.length} stages</span>`;
     case 'residual': return `<span class="dims">d=${n.out}</span>`;
     case 'repeat': return `\\u00d7 ${n.count} <span class="dims">(independent params)</span>`;
-    case 'ref': return `\\u2192 ${n.ref} <span class="dims">(fresh params)</span>`;
+    case 'ref': return `<span class="ref-link" data-ref="${n.ref}">${n.ref}</span> <span class="dims">(fresh params)</span>`;
     default: return '';
   }
 };
@@ -153,6 +175,17 @@ const effectiveChildren = n => {
 
 const render = (n, denom) => {
   const kids = effectiveChildren(n);
+  if (n.kind === 'residual' && kids && kids.length) {
+    const pct = denom ? (100 * n.params / denom) : 0;
+    return `<div class="residual-wrap" title="x + body(x) \\u2014 skip connection">
+      <div class="residual-tag">
+        <span class="dot" style="background:var(--k-residual)"></span>
+        residual \\u00b7 x + body(x)
+        <span class="sum">${pct.toFixed(1)}% \\u00b7 ${fmt(n.params)}</span>
+      </div>
+      ${kids.map(c => render(c, denom)).join('')}
+    </div>`;
+  }
   if (!kids || !kids.length) return row(n, denom, true);
   return `<details open><summary>${row(n, denom, false)}</summary>
     <div class="children">${kids.map(c => render(c, denom)).join('')}</div>
@@ -165,13 +198,24 @@ document.getElementById('total').innerHTML =
 const denom = Math.max(...data.defines.map(d => d.node.params));
 
 document.getElementById('defines').innerHTML = data.defines.map(d => `
-  <div class="card">
+  <div class="card" id="def-${d.name}">
     <div class="define-head">
       <span class="define-name">${d.name}</span>
       <span class="define-meta">${d.node.in} \\u2192 ${d.node.out} \\u00b7 ${d.node.params.toLocaleString()} params (${fmt(d.node.params)})</span>
     </div>
     ${render(d.node, denom)}
   </div>`).join('');
+
+document.addEventListener('click', e => {
+  const link = e.target.closest('.ref-link');
+  if (!link) return;
+  const card = document.getElementById('def-' + link.dataset.ref);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  card.classList.remove('flash');
+  void card.offsetWidth;
+  card.classList.add('flash');
+});
 
 const all = open => document.querySelectorAll('details').forEach(el => el.open = open);
 document.getElementById('expand').onclick = () => all(true);

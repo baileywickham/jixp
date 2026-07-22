@@ -629,7 +629,7 @@ def main():
 
         viz_path = str(in_path.with_suffix(".html")) if args.viz is True else args.viz
         with open(viz_path, "w") as f:
-            f.write(render_html(summary, title=f"jexprlisp · {in_path.name}"))
+            f.write(render_html(summary, title=f"jixp · {in_path.name}"))
         print(f"wrote {viz_path}")
 
 
