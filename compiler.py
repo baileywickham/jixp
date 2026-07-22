@@ -26,9 +26,12 @@ valued (#:activation gelu) or bare flags (#:causal).
                                      (..., seq, dim); the optional #:causal
                                      flag masks future positions
     (chain <block> <block>...)       sequential composition
-    (residual <block>)               x + block(x); block must preserve dim
-    (repeat <count> <block>)         count copies with independent params;
-                                     block must preserve dim
+    (residual <block>...)            x + body(x); body must preserve dim
+    (repeat <count> <block>...)      count copies with independent params;
+                                     body must preserve dim
+
+residual and repeat bodies chain implicitly: (residual a b) is
+(residual (chain a b)).
 
 A <dim> is a compile-time expression evaluated by the jisp interpreter:
 an int literal, a let-dim name, arithmetic like (* 4 d), or coefficient
@@ -299,13 +302,20 @@ def _compile_block(name, block, dim_env, registry):
             return (*_compile_attention(name, dim, heads, causal), name)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env, registry)
-        case ["residual", sub_block]:
-            return _compile_residual(name, sub_block, dim_env, registry)
-        case ["repeat", count_form, sub_block]:
+        case ["residual", *blocks] if blocks:
+            return _compile_residual(name, _implicit_chain(blocks), dim_env, registry)
+        case ["repeat", count_form, *blocks] if blocks:
             count = _resolve_dim(count_form, dim_env)
-            return _compile_repeat(name, count, sub_block, dim_env, registry)
+            return _compile_repeat(
+                name, count, _implicit_chain(blocks), dim_env, registry
+            )
         case _:
             raise CompileError(f"unknown block: {block!r}")
+
+
+def _implicit_chain(blocks):
+    """Multi-block bodies (residual, repeat) chain implicitly."""
+    return blocks[0] if len(blocks) == 1 else ["chain", *blocks]
 
 
 def _mlp_spec(args, dim_env):

@@ -497,3 +497,23 @@ def test_internals_are_underscore_private():
     assert "def _init_m_layer0(key):" in out
     assert "def init_m(key):" in out
     compile(out, "<generated>", "exec")
+
+
+def test_residual_body_chains_implicitly():
+    out = compile_source(
+        "(let-dim (d 8)) (define r (residual (layernorm d) (mlp d [] d)))"
+    )
+    assert "return x + _r_inner(params, x)" in out
+    assert "def _r_inner_layer0(params, x):" in out
+    compile(out, "<generated>", "exec")
+
+
+def test_repeat_body_chains_implicitly():
+    out = compile_source("(define s (repeat 2 (layernorm 4) (layernorm 4)))")
+    assert "[_init_s_body(k) for k in jax.random.split(key, 2)]" in out
+    assert "def _s_body_layer1(params, x):" in out
+
+
+def test_implicit_chain_still_checks_dims():
+    with pytest.raises(CompileError, match="mismatch"):
+        compile_source("(define r (residual (layernorm 8) (layernorm 5)))")

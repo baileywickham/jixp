@@ -15,10 +15,13 @@ jisp is three small pieces, each built on the last:
 (let-dim
   (d 128) (heads 8) (layers 4))
 
-(define attn-block (residual (chain (layernorm d) (attention d heads #:causal))))
-(define ffn-block (residual (chain (layernorm d) (mlp d [4d] d))))
+(define block (chain
+  (residual (layernorm d)
+            (attention d heads #:causal))
+  (residual (layernorm d)
+            (mlp d [4d] d))))
 
-(define encoder (repeat layers (chain attn-block ffn-block)))
+(define encoder (repeat layers block))
 ```
 
 ```console
@@ -31,18 +34,17 @@ functions, dims baked in as literals:
 
 ```python
 __all__ = [
-    "init_attn_block", "attn_block",
-    "init_ffn_block", "ffn_block",
+    "init_block", "block",
     "init_encoder", "encoder",
 ]
 
 def init_encoder(key):
-    return [_init_encoder_body(k) for k in jax.random.split(key, 4)]
+    return [init_block(k) for k in jax.random.split(key, 4)]
 
 
 def encoder(params, x):
     for layer_params in params:
-        x = _encoder_body(layer_params, x)
+        x = block(layer_params, x)
     return x
 ```
 
@@ -107,8 +109,11 @@ Blocks:
 | `(layernorm dim)` | layer normalization with scale and shift |
 | `(attention dim heads #:causal?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions |
 | `(chain block...)` | sequential composition |
-| `(residual block)` | `x + block(x)`; block must preserve dim |
-| `(repeat count block)` | `count` copies with independent params; block must preserve dim |
+| `(residual block...)` | `x + body(x)`; body must preserve dim |
+| `(repeat count block...)` | `count` copies with independent params; body must preserve dim |
+
+Multi-block `residual`/`repeat` bodies chain implicitly: `(residual a b)`
+is `(residual (chain a b))`.
 
 A block position also accepts the name of an earlier `define` — references compile
 to calls of that block's functions, and each use initializes fresh params (a
@@ -134,8 +139,9 @@ before any Python runs.
 - `(...)` is always a form; `[...]` is always data (a tuple), e.g. mlp hidden dims.
 - Required args are positional; options are keywords — valued (`#:activation relu`)
   or flags (`#:causal`).
-- `define` names become Python function names, so they must be valid Python
-  identifiers (`attn-block`, not `attn-block`).
+- `;` starts a line comment.
+- Names may use Racket-style hyphens (`attn-block`); they become underscores
+  (`attn_block`) in the generated Python.
 
 ## The Lisp
 
