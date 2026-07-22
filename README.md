@@ -1,9 +1,9 @@
-# jexprlisp
+# jixp
 
 A tiny Lisp that compiles neural network definitions to pure-[JAX](https://github.com/jax-ml/jax) Python.
 (The language and file extension are `jisp` — j-expressions.)
 
-jexprlisp is three small pieces, each built on the last:
+jixp is three small pieces, each built on the last:
 
 1. **A parser** (`jisp.py`) — s-expressions to plain Python lists/tuples.
 2. **An evaluator** (`jisp.py`) — a minimal Lisp: `quote`, `if`, `define`, `lambda`, arithmetic.
@@ -60,7 +60,7 @@ y = t.encoder(params, x)          # x: (batch, seq, 128)
 ## Workflow
 
 Write the `.jisp`, compile it, and import the generated module into ordinary
-JAX code — jexprlisp is a build step, never a runtime dependency. A complete
+JAX code — jixp is a build step, never a runtime dependency. A complete
 train-XOR example lives in `examples/`:
 
 ```lisp
@@ -145,7 +145,7 @@ to calls of that block's functions, and each use initializes fresh params (a
 ### Dims
 
 Anywhere a dimension is expected you can write a compile-time expression,
-evaluated by the jexprlisp interpreter:
+evaluated by the jixp interpreter:
 
 ```lisp
 (let-dim (d 128) (ffn (* 4 d)))
