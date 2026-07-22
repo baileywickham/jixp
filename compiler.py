@@ -19,7 +19,8 @@ valued (#:activation gelu) or bare flags (#:causal).
                                      dense layers; activation is one of
                                      relu gelu silu sigmoid tanh (default
                                      gelu), applied after each hidden layer
-                                     (never after the output layer)
+                                     (never after the output layer); dense
+                                     layers are bias-free
     (layernorm <dim>)
     (embedding <vocab> <dim>)        lookup table: int token ids (..., seq)
                                      -> (..., seq, dim); its input is the
@@ -68,9 +69,7 @@ import jax.numpy as jnp
 HELPERS = {
     "dense": '''
 def _init_dense(key, in_dim, out_dim):
-    W = jax.random.normal(key, (in_dim, out_dim)) * jnp.sqrt(2.0 / in_dim)
-    b = jnp.zeros(out_dim)
-    return W, b
+    return jax.random.normal(key, (in_dim, out_dim)) * jnp.sqrt(2.0 / in_dim)
 ''',
     "attention": '''
 def _split_heads(x, heads):
@@ -369,10 +368,9 @@ def {_init_of(name)}(key):
 
 
 def {name}(params, x):
-    for W, b in params[:-1]:
-        x = {ACTIVATIONS[activation]}(x @ W + b)
-    W, b = params[-1]
-    return x @ W + b
+    for W in params[:-1]:
+        x = {ACTIVATIONS[activation]}(x @ W)
+    return x @ params[-1]
 '''
     return [defs], dims[0], dims[-1], {"dense"}
 
