@@ -576,3 +576,16 @@ def test_mlp_default_is_bias_free():
     out = compile_source(MLP_SRC)
     assert "b" not in out.split("def model(params, x):")[1].split("def")[0].replace("bias", "")
     assert "_init_dense(keys[0], 784, 256)" in out
+
+
+def test_public_applies_are_jitted():
+    out = compile_source("(define m (chain (layernorm 8) (mlp 8 [16] 8)))")
+    assert "@jax.jit\ndef m(params, x):" in out
+    assert "@jax.jit\ndef _m_layer0" not in out
+    assert "@jax.jit\ndef init_" not in out
+
+
+def test_alias_defines_are_jitted():
+    out = compile_source("(define a (layernorm 8)) (define b a)")
+    assert "@jax.jit\ndef a(params, x):" in out
+    assert "@jax.jit\ndef b(params, x):" in out

@@ -44,7 +44,8 @@ sugar like 4d (meaning (* 4 d)). Brackets [...] are data tuples, used for
 mlp hidden dims.
 
 Each define compiles to a pair of functions in the output module:
-init_<name>(key) building a params pytree, and <name>(params, x). Names may
+init_<name>(key) building a params pytree, and <name>(params, x), the
+latter wrapped in @jax.jit (use jax.disable_jit() to debug). Names may
 use Racket-style hyphens (attn-block); they become underscores in the
 generated Python. ';' starts a line comment.
 """
@@ -177,6 +178,15 @@ def {mangled}(params, x):
     return {entry}(params, x)
 ''']
         registry[name] = (in_dim, out_dim, mangled)
+        # jit the public apply function only: sub-blocks are inlined when it
+        # traces, and init functions run once, so neither benefits.
+        block_defs = [
+            d.replace(
+                f"\ndef {mangled}(params, x):",
+                f"\n@jax.jit\ndef {mangled}(params, x):",
+            )
+            for d in block_defs
+        ]
         defs.extend(block_defs)
         helpers |= block_helpers
     if not defs:

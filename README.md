@@ -43,6 +43,7 @@ def init_encoder(key):
     return [init_block(k) for k in jax.random.split(key, 4)]
 
 
+@jax.jit
 def encoder(params, x):
     for layer_params in params:
         x = block(layer_params, x)
@@ -90,8 +91,10 @@ step 2000  loss 0.000000
 predictions: [0.0, 1.0, 1.0, 0.0]
 ```
 
-Params are ordinary pytrees and the generated functions are pure, so `jit`,
-`grad`, `vmap`, optax optimizers, and orbax checkpointing all apply directly.
+Params are ordinary pytrees and the generated functions are pure, so `grad`,
+`vmap`, optax optimizers, and orbax checkpointing all apply directly. Every
+public apply function ships wrapped in `@jax.jit` (internals are inlined at
+trace time); use `jax.disable_jit()` when you want to step through eagerly.
 
 ## The DSL
 
