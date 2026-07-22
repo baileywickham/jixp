@@ -82,7 +82,7 @@ _TEMPLATE = """<!doctype html>
   details[open] > summary .caret { transform: rotate(90deg); }
   .leaf .caret { visibility: hidden; }
   .dot { width: 10px; height: 10px; border-radius: 3px; }
-  .kind { color: var(--ink-2); font-size: 12.5px; }
+  .kind { color: var(--ink-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .detail { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .detail .dims { color: var(--muted); }
   .meter { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
@@ -148,7 +148,7 @@ const detail = n => {
     case 'chain': return `<span class="dims">${n.in} \\u2192 ${n.out} \\u00b7 ${n.children.length} stages</span>`;
     case 'residual': return `<span class="dims">d=${n.out}</span>`;
     case 'repeat': return `\\u00d7 ${n.count} <span class="dims">(independent params)</span>`;
-    case 'ref': return `<span class="ref-link" data-ref="${n.ref}">${n.ref}</span> <span class="dims">(fresh params)</span>`;
+    case 'ref': return `<span class="dims">(fresh params)</span>`;
     default: return '';
   }
 };
@@ -158,7 +158,8 @@ const row = (n, denom, leaf) => {
   return `<div class="row ${leaf ? 'leaf' : ''}" title="${n.params.toLocaleString()} params">
     <span class="caret">\\u25b6</span>
     <span class="dot" style="background:var(--k-${n.kind})"></span>
-    <span class="kind">${n.kind}</span>
+    <span class="kind">${n.kind === 'ref'
+      ? `<span class="ref-link" data-ref="${n.ref}">${n.ref}</span>` : n.kind}</span>
     <span class="detail">${detail(n)}</span>
     <span class="meter"><i style="width:${Math.max(pct, 0.75)}%"></i></span>
     <span class="share">${pct.toFixed(1)}%</span>
