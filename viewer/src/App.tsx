@@ -58,6 +58,8 @@ function Detail({ n }: { n: ModelNode }) {
       );
     case "layernorm":
       return <span className={dims}>d={n.out}</span>;
+    case "rmsnorm":
+      return <span className={dims}>d={n.out}{n.scale ? "" : " · no scale"}</span>;
     case "embedding":
       return <span className={dims}>vocab={n.vocab} → d={n.out}</span>;
     case "attention":

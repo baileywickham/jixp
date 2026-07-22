@@ -127,8 +127,9 @@ Blocks:
 
 | block | meaning |
 |---|---|
-| `(mlp in [hidden...] out #:activation gelu? #:bias?)` | dense layers; activation (`relu` `gelu` `silu` `sigmoid` `tanh`, default `gelu`) after each hidden layer, never after the output layer; bias-free unless `#:bias` |
+| `(mlp in [hidden...] out #:activation gelu? #:bias?)` | dense layers; activation (`relu` `relu2` `gelu` `silu` `sigmoid` `tanh`, default `gelu`) after each hidden layer, never after the output layer; bias-free unless `#:bias` |
 | `(layernorm dim)` | layer normalization with scale and shift |
+| `(rmsnorm dim #:no-scale?)` | RMS normalization with learnable scale; `#:no-scale` makes it parameter-free |
 | `(embedding vocab dim)` | lookup table: int token ids `(..., seq)` → `(..., seq, dim)`; only valid at the start of a model |
 | `(attention dim heads #:causal?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions |
 | `(chain block...)` | sequential composition |

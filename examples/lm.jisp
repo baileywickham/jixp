@@ -7,13 +7,13 @@
   (layers 4))
 
 (define block (chain
-  (residual (layernorm d)
+  (residual (rmsnorm d)
             (attention d heads #:causal))
-  (residual (layernorm d)
-            (mlp d [4d] d))))
+  (residual (rmsnorm d)
+            (mlp d [4d] d #:activation relu2))))
 
 (define lm (chain
   (embedding vocab d)
   (repeat layers block)
-  (layernorm d)
+  (rmsnorm d)
   (mlp d [] vocab)))

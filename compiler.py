@@ -17,11 +17,13 @@ valued (#:activation gelu) or bare flags (#:causal).
 
     (mlp <in> [<hidden>...] <out> #:activation <name>?)
                                      dense layers; activation is one of
-                                     relu gelu silu sigmoid tanh (default
+                                     relu relu2 gelu silu sigmoid tanh (default
                                      gelu), applied after each hidden layer
                                      (never after the output layer); dense
                                      layers are bias-free unless #:bias
     (layernorm <dim>)
+    (rmsnorm <dim> #:no-scale?)      RMS normalization with a learnable scale;
+                                     #:no-scale makes it parameter-free
     (embedding <vocab> <dim>)        lookup table: int token ids (..., seq)
                                      -> (..., seq, dim); its input is the
                                      pseudo-dim "tokens", so it can only
@@ -94,11 +96,12 @@ def _merge_heads(x):
 
 
 ACTIVATIONS = {
-    "relu": "jax.nn.relu",
-    "gelu": "jax.nn.gelu",
-    "silu": "jax.nn.silu",
-    "sigmoid": "jax.nn.sigmoid",
-    "tanh": "jnp.tanh",
+    "relu": "jax.nn.relu({x})",
+    "relu2": "jnp.square(jax.nn.relu({x}))",
+    "gelu": "jax.nn.gelu({x})",
+    "silu": "jax.nn.silu({x})",
+    "sigmoid": "jax.nn.sigmoid({x})",
+    "tanh": "jnp.tanh({x})",
 }
 
 
@@ -329,6 +332,18 @@ def _compile_block(name, block, dim_env, registry):
             return (*_compile_mlp(name, *_mlp_spec(args, dim_env)), name)
         case ["layernorm", dim]:
             return (*_compile_layernorm(name, _resolve_dim(dim, dim_env)), name)
+        case ["rmsnorm", *args]:
+            positionals, options = _parse_options(args, {"#:no-scale": "flag"}, "rmsnorm")
+            match positionals:
+                case [dim_form]:
+                    pass
+                case _:
+                    raise CompileError(
+                        f"rmsnorm expects (rmsnorm <dim> #:no-scale?), got {args!r}"
+                    )
+            dim = _resolve_dim(dim_form, dim_env)
+            scale = not options.get("#:no-scale", False)
+            return (*_compile_rmsnorm(name, dim, scale), name)
         case ["embedding", vocab_form, dim_form]:
             vocab = _resolve_dim(vocab_form, dim_env)
             dim = _resolve_dim(dim_form, dim_env)
@@ -407,13 +422,15 @@ def _compile_mlp(name, dims, activation, use_bias):
         f"{dense}(keys[{i}], {dims[i]}, {dims[i + 1]})" for i in range(n_layers)
     )
     if use_bias:
+        act = ACTIVATIONS[activation].format(x="x @ W + b")
         body = f'''    for W, b in params[:-1]:
-        x = {ACTIVATIONS[activation]}(x @ W + b)
+        x = {act}
     W, b = params[-1]
     return x @ W + b'''
     else:
+        act = ACTIVATIONS[activation].format(x="x @ W")
         body = f'''    for W in params[:-1]:
-        x = {ACTIVATIONS[activation]}(x @ W)
+        x = {act}
     return x @ params[-1]'''
     defs = f'''
 def {_init_of(name)}(key):
@@ -450,6 +467,33 @@ def {name}(params, x):
     return scale * (x - mean) / jnp.sqrt(var + 1e-5) + shift
 '''
     node = {"kind": "layernorm", "in": dim, "out": dim, "params": 2 * dim}
+    return [defs], node, set()
+
+
+def _compile_rmsnorm(name, dim, scale):
+    if scale:
+        defs = f'''
+def {_init_of(name)}(key):
+    return jnp.ones({dim})
+
+
+def {name}(params, x):
+    x = x / jnp.sqrt(jnp.mean(x * x, axis=-1, keepdims=True) + 1e-5)
+    return x * params
+'''
+    else:
+        defs = f'''
+def {_init_of(name)}(key):
+    return ()
+
+
+def {name}(params, x):
+    return x / jnp.sqrt(jnp.mean(x * x, axis=-1, keepdims=True) + 1e-5)
+'''
+    node = {
+        "kind": "rmsnorm", "in": dim, "out": dim,
+        "scale": scale, "params": dim if scale else 0,
+    }
     return [defs], node, set()
 
 

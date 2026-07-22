@@ -651,3 +651,48 @@ def test_cli_viz_and_json_outputs(tmp_path):
     assert "model-data" in html and '"kind"' in html
     data = _json.loads((tmp_path / "m.model.json").read_text())
     assert data["total_params"] == 4 * 8 + 8 * 2
+
+
+def test_rmsnorm_with_scale():
+    out = compile_source("(define n (rmsnorm 64))")
+    assert "jnp.ones(64)" in out
+    assert "return x * params" in out
+    assert model_summary("(define n (rmsnorm 64))")["defines"][0]["node"]["params"] == 64
+
+
+def test_rmsnorm_no_scale_is_parameter_free():
+    src = "(define n (rmsnorm 64 #:no-scale))"
+    out = compile_source(src)
+    assert "return ()" in out
+    assert model_summary(src)["defines"][0]["node"]["params"] == 0
+
+
+def test_rmsnorm_composes_in_residual():
+    out = compile_source("(let-dim (d 16)) (define r (residual (rmsnorm d) (mlp d [4d] d)))")
+    assert "return x + _r_inner(params, x)" in out
+
+
+def test_relu2_activation_emits_square():
+    out = compile_source("(define m (mlp 8 [16] 4 #:activation relu2))")
+    assert "jnp.square(jax.nn.relu(x @ W))" in out
+
+
+def test_modern_block_runs_under_jax(tmp_path):
+    jax = pytest.importorskip("jax")
+    src = """
+    (let-dim (d 16))
+    (define block (chain
+      (residual (rmsnorm d #:no-scale) (attention d 4 #:causal))
+      (residual (rmsnorm d #:no-scale) (mlp d [4d] d #:activation relu2))))
+    """
+    mod_path = tmp_path / "gen_modern.py"
+    mod_path.write_text(compile_source(src))
+    spec = importlib.util.spec_from_file_location("gen_modern", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    params = mod.init_block(jax.random.PRNGKey(0))
+    actual = sum(a.size for a in jax.tree.leaves(params))
+    assert actual == model_summary(src)["defines"][0]["node"]["params"]
+    y = mod.block(params, jax.random.normal(jax.random.PRNGKey(1), (2, 5, 16)))
+    assert y.shape == (2, 5, 16)
+    assert bool(jax.numpy.isfinite(y).all())

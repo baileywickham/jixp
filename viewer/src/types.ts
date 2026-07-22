@@ -19,6 +19,11 @@ export interface LayernormNode extends BaseNode {
   kind: "layernorm";
 }
 
+export interface RmsnormNode extends BaseNode {
+  kind: "rmsnorm";
+  scale: boolean;
+}
+
 export interface EmbeddingNode extends BaseNode {
   kind: "embedding";
   vocab: number;
@@ -54,6 +59,7 @@ export interface RefNode extends BaseNode {
 export type ModelNode =
   | MlpNode
   | LayernormNode
+  | RmsnormNode
   | EmbeddingNode
   | AttentionNode
   | ChainNode
