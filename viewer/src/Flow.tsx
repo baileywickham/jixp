@@ -67,7 +67,7 @@ export function FlowNode({ n, denom, onJump }: { n: ModelNode; denom: number; on
 
   if (n.kind === "residual" && kids?.length) {
     return (
-      <div className="relative mx-auto w-full max-w-[460px] pl-7">
+      <div className="relative mx-auto w-full max-w-[488px] pl-7 pr-7">
         {/* skip lane: down the left, around the body, into the merge node */}
         <div
           className="absolute bottom-[11px] left-1.5 top-[-12px] w-4 rounded-l-xl border-2 border-r-0 opacity-70"

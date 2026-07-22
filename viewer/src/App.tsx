@@ -128,7 +128,7 @@ function Node({ n, denom }: { n: ModelNode; denom: number }) {
         className="my-[5px] rounded-lg border
                    border-[color-mix(in_srgb,var(--k-residual)_35%,transparent)]
                    bg-[color-mix(in_srgb,var(--k-residual)_5%,transparent)]
-                   px-2 pb-1 pt-0.5"
+                   px-0 pb-1 pt-0.5"
         title="x + body(x) — skip connection"
       >
         <div className="flex items-center gap-[7px] px-1.5 pb-0.5 pt-[3px] text-[11.5px] text-[var(--ink-2)]">
