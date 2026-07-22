@@ -109,6 +109,11 @@ structural summary as plain JSON for your own tooling, and it's also embedded
 in the HTML. The counts are exact: a test asserts they equal what `init_*`
 actually allocates under JAX.
 
+There's also a real-data version of the same pattern: `examples/mnist.jisp`
+(one line: `(define classifier (mlp 784 [256 128] 10 #:bias))`) with
+`examples/train_mnist.py` — downloads MNIST, hand-rolled cross-entropy and
+SGD-with-momentum, ~98% test accuracy in three epochs on CPU.
+
 Params are ordinary pytrees and the generated functions are pure, so `grad`,
 `vmap`, optax optimizers, and orbax checkpointing all apply directly. Every
 public apply function ships wrapped in `@jax.jit` (internals are inlined at

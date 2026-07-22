@@ -1,0 +1,4 @@
+; MNIST digit classifier: flattened 28x28 pixels -> 10 logits.
+; #:bias because there are no norm layers here — raw-input MLPs need
+; their activation thresholds.
+(define classifier (mlp 784 [256 128] 10 #:bias))
