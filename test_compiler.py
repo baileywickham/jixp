@@ -517,3 +517,47 @@ def test_repeat_body_chains_implicitly():
 def test_implicit_chain_still_checks_dims():
     with pytest.raises(CompileError, match="mismatch"):
         compile_source("(define r (residual (layernorm 8) (layernorm 5)))")
+
+
+def test_embedding_emits_lookup_table():
+    out = compile_source("(define emb (embedding 100 32))")
+    assert "jax.random.normal(key, (100, 32)) * 0.02" in out
+    assert "return params[x]" in out
+    compile(out, "<generated>", "exec")
+
+
+def test_embedding_starts_a_chain():
+    out = compile_source("(define m (chain (embedding 100 32) (layernorm 32)))")
+    assert "def init_m(key):" in out
+
+
+def test_embedding_cannot_continue_a_chain():
+    with pytest.raises(CompileError, match="outputs 32 but layer 1 expects tokens"):
+        compile_source("(define m (chain (layernorm 32) (embedding 100 32)))")
+
+
+def test_embedding_rejected_in_residual():
+    with pytest.raises(CompileError, match="residual requires matching"):
+        compile_source("(define r (residual (embedding 100 32)))")
+
+
+def test_generated_lm_pipeline_runs_under_jax(tmp_path):
+    jax = pytest.importorskip("jax")
+    src = """
+    (let-dim (vocab 50) (d 16))
+    (define lm (chain
+      (embedding vocab d)
+      (residual (layernorm d) (attention d 4 #:causal))
+      (layernorm d)
+      (mlp d [] vocab)))
+    """
+    mod_path = tmp_path / "gen_lm.py"
+    mod_path.write_text(compile_source(src))
+    spec = importlib.util.spec_from_file_location("gen_lm", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    params = mod.init_lm(jax.random.PRNGKey(0))
+    tokens = jax.numpy.array([[1, 2, 3, 4], [5, 6, 7, 8]])
+    logits = mod.lm(params, tokens)
+    assert logits.shape == (2, 4, 50)
+    assert bool(jax.numpy.isfinite(logits).all())

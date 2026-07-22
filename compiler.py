@@ -21,6 +21,10 @@ valued (#:activation gelu) or bare flags (#:causal).
                                      gelu), applied after each hidden layer
                                      (never after the output layer)
     (layernorm <dim>)
+    (embedding <vocab> <dim>)        lookup table: int token ids (..., seq)
+                                     -> (..., seq, dim); its input is the
+                                     pseudo-dim "tokens", so it can only
+                                     start a model, never continue one
     (attention <dim> <heads> #:causal?)
                                      multi-head self-attention over
                                      (..., seq, dim); the optional #:causal
@@ -282,6 +286,10 @@ def _compile_block(name, block, dim_env, registry):
             return (*_compile_mlp(name, *_mlp_spec(args, dim_env)), name)
         case ["layernorm", dim]:
             return (*_compile_layernorm(name, _resolve_dim(dim, dim_env)), name)
+        case ["embedding", vocab_form, dim_form]:
+            vocab = _resolve_dim(vocab_form, dim_env)
+            dim = _resolve_dim(dim_form, dim_env)
+            return (*_compile_embedding(name, vocab, dim), name)
         case ["attention", *args]:
             positionals, options = _parse_options(args, {"#:causal": "flag"}, "attention")
             match positionals:
@@ -382,6 +390,18 @@ def {name}(params, x):
     return scale * (x - mean) / jnp.sqrt(var + 1e-5) + shift
 '''
     return [defs], dim, dim, set()
+
+
+def _compile_embedding(name, vocab, dim):
+    defs = f'''
+def {_init_of(name)}(key):
+    return jax.random.normal(key, ({vocab}, {dim})) * 0.02
+
+
+def {name}(params, x):
+    return params[x]
+'''
+    return [defs], "tokens", dim, set()
 
 
 def _compile_attention(name, dim, heads, causal):
