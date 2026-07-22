@@ -1,239 +1,29 @@
 """Render a model_summary() as a self-contained interactive HTML explorer.
 
-The page embeds the summary JSON (also usable by other tools) and renders a
-collapsible tree: one node per *source* block, so repeat shows a single node
-with multiplied params and the page stays small for arbitrarily large models.
+The viewer is a Vite + React + TypeScript app in viewer/; its single-file
+build (viewer/dist/index.html, committed) is the template here. This module
+just injects the title and the summary JSON into that template — the page
+embeds the JSON (usable by other tools) and renders a collapsible tree with
+one node per *source* block, so repeat shows a single node with multiplied
+params and the page stays small for arbitrarily large models.
+
+Rebuild the template after changing the viewer:
+    npm --prefix viewer install && npm --prefix viewer run build
 """
 
 import json
+from pathlib import Path
 
-_TEMPLATE = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__TITLE__</title>
-<style>
-  :root {
-    color-scheme: light;
-    --surface: #fcfcfb; --page: #f9f9f7;
-    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
-    --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
-    --accent: #2a78d6;
-    --k-embedding: #2a78d6; --k-mlp: #eb6834; --k-attention: #1baf7a;
-    --k-layernorm: #eda100; --k-chain: #e87ba4; --k-residual: #008300;
-    --k-repeat: #4a3aa7; --k-ref: #e34948;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) {
-      color-scheme: dark;
-      --surface: #1a1a19; --page: #0d0d0d;
-      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-      --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
-      --accent: #3987e5;
-      --k-embedding: #3987e5; --k-mlp: #d95926; --k-attention: #199e70;
-      --k-layernorm: #c98500; --k-chain: #d55181; --k-residual: #008300;
-      --k-repeat: #9085e9; --k-ref: #e66767;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --surface: #1a1a19; --page: #0d0d0d;
-    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
-    --accent: #3987e5;
-    --k-embedding: #3987e5; --k-mlp: #d95926; --k-attention: #199e70;
-    --k-layernorm: #c98500; --k-chain: #d55181; --k-residual: #008300;
-    --k-repeat: #9085e9; --k-ref: #e66767;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px; background: var(--page); color: var(--ink);
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  .wrap { max-width: 880px; margin: 0 auto; }
-  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
-  h1 { font-size: 18px; margin: 0; }
-  .hero { font-size: 28px; font-weight: 700; }
-  .hero small { font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 6px; }
-  .toolbar { margin-left: auto; display: flex; gap: 8px; }
-  .toolbar button {
-    font: inherit; font-size: 12.5px; color: var(--ink-2); background: var(--surface);
-    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
-  }
-  .toolbar button:hover { color: var(--ink); }
-  .card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 14px; margin: 14px 0;
-  }
-  .card > .define-head { display: flex; align-items: baseline; gap: 10px; padding: 4px 0 8px; border-bottom: 1px solid var(--grid); margin-bottom: 6px; }
-  .define-name { font-weight: 700; font-size: 15px; }
-  .define-meta { color: var(--ink-2); font-size: 12.5px; }
-  details { margin: 0; }
-  summary { list-style: none; cursor: pointer; }
-  summary::-webkit-details-marker { display: none; }
-  .row {
-    display: grid; align-items: center; gap: 10px;
-    grid-template-columns: 14px 10px 84px minmax(120px, 1fr) minmax(90px, 220px) 58px 92px;
-    padding: 4px 6px; border-radius: 6px;
-  }
-  .row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-  .caret { color: var(--muted); font-size: 10px; transition: transform .12s; width: 14px; text-align: center; }
-  details[open] > summary .caret { transform: rotate(90deg); }
-  .leaf .caret { visibility: hidden; }
-  .dot { width: 10px; height: 10px; border-radius: 3px; }
-  .kind { color: var(--ink-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .detail { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .detail .dims { color: var(--muted); }
-  .meter { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
-  .meter > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; min-width: 2px; }
-  .share, .params { text-align: right; font-variant-numeric: tabular-nums; }
-  .share { color: var(--muted); font-size: 12px; }
-  .params { color: var(--ink-2); font-size: 12.5px; }
-  .children { margin-left: 22px; border-left: 1px solid var(--grid); padding-left: 8px; }
-  .ref-link {
-    color: var(--accent); font-weight: 600; cursor: pointer;
-    text-decoration: underline dotted; text-underline-offset: 3px;
-  }
-  .residual-wrap {
-    border: 1px solid color-mix(in srgb, var(--k-residual) 35%, transparent);
-    background: color-mix(in srgb, var(--k-residual) 5%, transparent);
-    border-radius: 8px; padding: 2px 8px 4px; margin: 5px 0;
-  }
-  .residual-tag {
-    display: flex; align-items: center; gap: 7px;
-    color: var(--ink-2); font-size: 11.5px; padding: 3px 6px 2px;
-  }
-  .residual-tag .sum {
-    margin-left: auto; color: var(--muted); font-size: 12px;
-    font-variant-numeric: tabular-nums;
-  }
-  @keyframes flash {
-    0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
-    100% { box-shadow: 0 0 0 3px transparent; }
-  }
-  .flash { animation: flash 1.2s ease-out; }
-  footer { color: var(--muted); font-size: 12px; margin-top: 18px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>__TITLE__</h1>
-    <div class="hero" id="total"></div>
-    <div class="toolbar">
-      <button id="expand">expand all</button>
-      <button id="collapse">collapse all</button>
-      <button id="theme">theme</button>
-    </div>
-  </header>
-  <div id="defines"></div>
-  <footer>generated by jixp · one node per source block — <code>repeat</code> is a single node with multiplied params · meters are % of the largest define \u00b7 raw JSON embedded in this file</footer>
-</div>
-<script type="application/json" id="model-data">__DATA__</script>
-<script>
-const data = JSON.parse(document.getElementById('model-data').textContent);
-
-const fmt = n =>
-  n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' :
-  n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' :
-  n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n);
-
-const detail = n => {
-  switch (n.kind) {
-    case 'mlp': return `<span class="dims">${n.dims.join(' \\u2192 ')}</span> \\u00b7 ${n.activation}${n.bias ? ' \\u00b7 bias' : ''}`;
-    case 'layernorm': return `<span class="dims">d=${n.out}</span>`;
-    case 'embedding': return `<span class="dims">vocab=${n.vocab} \\u2192 d=${n.out}</span>`;
-    case 'attention': return `<span class="dims">d=${n.out} \\u00b7 heads=${n.heads}</span>${n.causal ? ' \\u00b7 causal' : ''}`;
-    case 'chain': return `<span class="dims">${n.in} \\u2192 ${n.out} \\u00b7 ${n.children.length} stages</span>`;
-    case 'residual': return `<span class="dims">d=${n.out}</span>`;
-    case 'repeat': return `\\u00d7 ${n.count} <span class="dims">(independent params)</span>`;
-    case 'ref': return `<span class="dims">(fresh params)</span>`;
-    default: return '';
-  }
-};
-
-const row = (n, denom, leaf) => {
-  const pct = denom ? (100 * n.params / denom) : 0;
-  return `<div class="row ${leaf ? 'leaf' : ''}" title="${n.params.toLocaleString()} params">
-    <span class="caret">\\u25b6</span>
-    <span class="dot" style="background:var(--k-${n.kind})"></span>
-    <span class="kind">${n.kind === 'ref'
-      ? `<span class="ref-link" data-ref="${n.ref}">${n.ref}</span>` : n.kind}</span>
-    <span class="detail">${detail(n)}</span>
-    <span class="meter"><i style="width:${Math.max(pct, 0.75)}%"></i></span>
-    <span class="share">${pct.toFixed(1)}%</span>
-    <span class="params">${fmt(n.params)}</span>
-  </div>`;
-};
-
-const effectiveChildren = n => {
-  let c = n.children;
-  while (c && c.length === 1 && c[0].kind === 'chain' && c[0].children)
-    c = c[0].children;   // implicit-chain wrapper: show its stages directly
-  return c;
-};
-
-const render = (n, denom) => {
-  const kids = effectiveChildren(n);
-  if (n.kind === 'residual' && kids && kids.length) {
-    const pct = denom ? (100 * n.params / denom) : 0;
-    return `<div class="residual-wrap" title="x + body(x) \\u2014 skip connection">
-      <div class="residual-tag">
-        <span class="dot" style="background:var(--k-residual)"></span>
-        residual \\u00b7 x + body(x)
-        <span class="sum">${pct.toFixed(1)}% \\u00b7 ${fmt(n.params)}</span>
-      </div>
-      ${kids.map(c => render(c, denom)).join('')}
-    </div>`;
-  }
-  if (!kids || !kids.length) return row(n, denom, true);
-  return `<details open><summary>${row(n, denom, false)}</summary>
-    <div class="children">${kids.map(c => render(c, denom)).join('')}</div>
-  </details>`;
-};
-
-document.getElementById('total').innerHTML =
-  fmt(data.total_params) + '<small>params across ' + data.defines.length + ' defines</small>';
-
-const denom = Math.max(...data.defines.map(d => d.node.params));
-
-document.getElementById('defines').innerHTML = data.defines.map(d => `
-  <div class="card" id="def-${d.name}">
-    <div class="define-head">
-      <span class="define-name">${d.name}</span>
-      <span class="define-meta">${d.node.in} \\u2192 ${d.node.out} \\u00b7 ${d.node.params.toLocaleString()} params (${fmt(d.node.params)})</span>
-    </div>
-    ${render(d.node, denom)}
-  </div>`).join('');
-
-document.addEventListener('click', e => {
-  const link = e.target.closest('.ref-link');
-  if (!link) return;
-  const card = document.getElementById('def-' + link.dataset.ref);
-  if (!card) return;
-  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  card.classList.remove('flash');
-  void card.offsetWidth;
-  card.classList.add('flash');
-});
-
-const all = open => document.querySelectorAll('details').forEach(el => el.open = open);
-document.getElementById('expand').onclick = () => all(true);
-document.getElementById('collapse').onclick = () => all(false);
-document.getElementById('theme').onclick = () => {
-  const r = document.documentElement;
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
-  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
-};
-</script>
-</body>
-</html>
-"""
+_TEMPLATE_PATH = Path(__file__).parent / "viewer" / "dist" / "index.html"
 
 
 def render_html(summary, title="jixp model"):
     """Return a self-contained HTML page exploring the model summary."""
+    if not _TEMPLATE_PATH.exists():
+        raise RuntimeError(
+            f"viewer template missing at {_TEMPLATE_PATH} — build it with: "
+            "npm --prefix viewer install && npm --prefix viewer run build"
+        )
+    template = _TEMPLATE_PATH.read_text()
     data = json.dumps(summary).replace("</", "<\\/")
-    return _TEMPLATE.replace("__TITLE__", title).replace("__DATA__", data)
+    return template.replace("__TITLE__", title).replace("__DATA__", data)

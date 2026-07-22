@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/* Palette tokens (validated light/dark steps) — Tailwind utilities reference
+   these via arbitrary values so theme switching stays a variable swap. */
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb; --page: #f9f9f7;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --border: rgba(11, 11, 11, 0.10);
+  --accent: #2a78d6;
+  --k-embedding: #2a78d6; --k-mlp: #eb6834; --k-attention: #1baf7a;
+  --k-layernorm: #eda100; --k-chain: #e87ba4; --k-residual: #008300;
+  --k-repeat: #4a3aa7; --k-ref: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface: #1a1a19; --page: #0d0d0d;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --k-embedding: #3987e5; --k-mlp: #d95926; --k-attention: #199e70;
+    --k-layernorm: #c98500; --k-chain: #d55181; --k-residual: #008300;
+    --k-repeat: #9085e9; --k-ref: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19; --page: #0d0d0d;
+  --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --border: rgba(255, 255, 255, 0.10);
+  --accent: #3987e5;
+  --k-embedding: #3987e5; --k-mlp: #d95926; --k-attention: #199e70;
+  --k-layernorm: #c98500; --k-chain: #d55181; --k-residual: #008300;
+  --k-repeat: #9085e9; --k-ref: #e66767;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 24px;
+}
+
+/* Bits utilities can't express: native-details chrome and the jump flash. */
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+details[open] > summary .caret { transform: rotate(90deg); }
+
+@keyframes flash {
+  0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+.flash { animation: flash 1.2s ease-out; }

@@ -15,3 +15,4 @@ uv.lock
 docs/superpowers/
 examples/*.html
 examples/*.model.json
+viewer/node_modules/

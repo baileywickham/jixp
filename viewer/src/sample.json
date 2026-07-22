@@ -1,0 +1,41 @@
+{
+  "defines": [
+    {
+      "name": "block",
+      "mangled": "block",
+      "node": {
+        "kind": "chain", "in": 16, "out": 16, "params": 3200,
+        "children": [
+          { "kind": "residual", "in": 16, "out": 16, "params": 1120, "children": [
+            { "kind": "chain", "in": 16, "out": 16, "params": 1120, "children": [
+              { "kind": "layernorm", "in": 16, "out": 16, "params": 32 },
+              { "kind": "attention", "in": 16, "out": 16, "heads": 4, "causal": true, "params": 1024 }
+            ] }
+          ] },
+          { "kind": "residual", "in": 16, "out": 16, "params": 2080, "children": [
+            { "kind": "chain", "in": 16, "out": 16, "params": 2080, "children": [
+              { "kind": "layernorm", "in": 16, "out": 16, "params": 32 },
+              { "kind": "mlp", "in": 16, "out": 16, "dims": [16, 64, 16], "activation": "gelu", "bias": false, "params": 2048 }
+            ] }
+          ] }
+        ]
+      }
+    },
+    {
+      "name": "lm",
+      "mangled": "lm",
+      "node": {
+        "kind": "chain", "in": "tokens", "out": 50, "params": 11232,
+        "children": [
+          { "kind": "embedding", "in": "tokens", "out": 16, "vocab": 50, "params": 800 },
+          { "kind": "repeat", "count": 3, "in": 16, "out": 16, "params": 9600, "children": [
+            { "kind": "ref", "ref": "block", "in": 16, "out": 16, "params": 3200 }
+          ] },
+          { "kind": "layernorm", "in": 16, "out": 16, "params": 32 },
+          { "kind": "mlp", "in": 16, "out": 50, "dims": [16, 50], "activation": "gelu", "bias": false, "params": 800 }
+        ]
+      }
+    }
+  ],
+  "total_params": 14432
+}

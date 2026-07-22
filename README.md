@@ -193,3 +193,13 @@ $ uv run --with pytest -- pytest            # unit tests
 $ uv run --with pytest --with jax -- pytest # + integration: runs generated modules,
                                             #   checks shapes and causality
 ```
+
+The HTML explorer is a Vite + React + TypeScript + Tailwind app in `viewer/`;
+its single-file build (`viewer/dist/index.html`, committed) is the template
+`--viz` fills in, so Python users never need node. After changing the viewer:
+
+```console
+$ npm --prefix viewer install
+$ npm --prefix viewer run build   # typechecks, then bundles to one file
+$ npm --prefix viewer run dev     # live dev server with a bundled sample model
+```
