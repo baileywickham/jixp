@@ -12,3 +12,4 @@ examples/*.py
 # agent scratch
 .superpowers/
 uv.lock
+docs/superpowers/

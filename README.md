@@ -171,5 +171,3 @@ $ uv run --with pytest -- pytest            # 106 tests
 $ uv run --with pytest --with jax -- pytest # + integration: runs generated modules,
                                             #   checks shapes and causality
 ```
-
-Design history lives in `docs/superpowers/`.
