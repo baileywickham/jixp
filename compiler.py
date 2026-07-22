@@ -20,7 +20,7 @@ valued (#:activation gelu) or bare flags (#:causal).
                                      relu gelu silu sigmoid tanh (default
                                      gelu), applied after each hidden layer
                                      (never after the output layer); dense
-                                     layers are bias-free
+                                     layers are bias-free unless #:bias
     (layernorm <dim>)
     (embedding <vocab> <dim>)        lookup table: int token ids (..., seq)
                                      -> (..., seq, dim); its input is the
@@ -70,6 +70,11 @@ HELPERS = {
     "dense": '''
 def _init_dense(key, in_dim, out_dim):
     return jax.random.normal(key, (in_dim, out_dim)) * jnp.sqrt(2.0 / in_dim)
+''',
+    "dense_bias": '''
+def _init_dense_bias(key, in_dim, out_dim):
+    W = jax.random.normal(key, (in_dim, out_dim)) * jnp.sqrt(2.0 / in_dim)
+    return W, jnp.zeros(out_dim)
 ''',
     "attention": '''
 def _split_heads(x, heads):
@@ -182,7 +187,7 @@ def {mangled}(params, x):
     ]
     exports = "\n".join(f'    "{fn}",' for fn in public)
     parts = [HEADER, f"\n__all__ = [\n{exports}\n]\n"]
-    for helper in ("dense", "attention"):
+    for helper in ("dense", "dense_bias", "attention"):
         if helper in helpers:
             parts.append(HELPERS[helper])
     parts.extend(defs)
@@ -326,7 +331,9 @@ def _implicit_chain(blocks):
 
 
 def _mlp_spec(args, dim_env):
-    positionals, options = _parse_options(args, {"#:activation": "value"}, "mlp")
+    positionals, options = _parse_options(
+        args, {"#:activation": "value", "#:bias": "flag"}, "mlp"
+    )
     match positionals:
         case [in_dim, tuple() as hidden, out_dim]:
             pass
@@ -351,14 +358,24 @@ def _mlp_spec(args, dim_env):
             f"expected one of: {' '.join(sorted(ACTIVATIONS))}"
         )
     dims = [_resolve_dim(d, dim_env) for d in (in_dim, *hidden, out_dim)]
-    return dims, activation
+    return dims, activation, options.get("#:bias", False)
 
 
-def _compile_mlp(name, dims, activation):
+def _compile_mlp(name, dims, activation, use_bias):
     n_layers = len(dims) - 1
+    dense = "_init_dense_bias" if use_bias else "_init_dense"
     inits = ",\n        ".join(
-        f"_init_dense(keys[{i}], {dims[i]}, {dims[i + 1]})" for i in range(n_layers)
+        f"{dense}(keys[{i}], {dims[i]}, {dims[i + 1]})" for i in range(n_layers)
     )
+    if use_bias:
+        body = f'''    for W, b in params[:-1]:
+        x = {ACTIVATIONS[activation]}(x @ W + b)
+    W, b = params[-1]
+    return x @ W + b'''
+    else:
+        body = f'''    for W in params[:-1]:
+        x = {ACTIVATIONS[activation]}(x @ W)
+    return x @ params[-1]'''
     defs = f'''
 def {_init_of(name)}(key):
     keys = jax.random.split(key, {n_layers})
@@ -368,11 +385,9 @@ def {_init_of(name)}(key):
 
 
 def {name}(params, x):
-    for W in params[:-1]:
-        x = {ACTIVATIONS[activation]}(x @ W)
-    return x @ params[-1]
+{body}
 '''
-    return [defs], dims[0], dims[-1], {"dense"}
+    return [defs], dims[0], dims[-1], {"dense_bias" if use_bias else "dense"}
 
 
 def _compile_layernorm(name, dim):

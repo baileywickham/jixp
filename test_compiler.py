@@ -561,3 +561,18 @@ def test_generated_lm_pipeline_runs_under_jax(tmp_path):
     logits = mod.lm(params, tokens)
     assert logits.shape == (2, 4, 50)
     assert bool(jax.numpy.isfinite(logits).all())
+
+
+def test_mlp_bias_flag_emits_bias_pairs():
+    out = compile_source("(define m (mlp 8 [16] 4 #:bias))")
+    assert "_init_dense_bias(keys[0], 8, 16)" in out
+    assert "x @ W + b" in out
+    assert "def _init_dense_bias(" in out
+    assert "def _init_dense(" not in out.replace("_init_dense_bias", "")
+    compile(out, "<generated>", "exec")
+
+
+def test_mlp_default_is_bias_free():
+    out = compile_source(MLP_SRC)
+    assert "b" not in out.split("def model(params, x):")[1].split("def")[0].replace("bias", "")
+    assert "_init_dense(keys[0], 784, 256)" in out

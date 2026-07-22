@@ -105,7 +105,7 @@ Blocks:
 
 | block | meaning |
 |---|---|
-| `(mlp in [hidden...] out #:activation gelu?)` | dense layers; activation (`relu` `gelu` `silu` `sigmoid` `tanh`, default `gelu`) after each hidden layer, never after the output layer |
+| `(mlp in [hidden...] out #:activation gelu? #:bias?)` | dense layers; activation (`relu` `gelu` `silu` `sigmoid` `tanh`, default `gelu`) after each hidden layer, never after the output layer; bias-free unless `#:bias` |
 | `(layernorm dim)` | layer normalization with scale and shift |
 | `(embedding vocab dim)` | lookup table: int token ids `(..., seq)` → `(..., seq, dim)`; only valid at the start of a model |
 | `(attention dim heads #:causal?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions |
