@@ -91,6 +91,24 @@ step 2000  loss 0.000000
 predictions: [0.0, 1.0, 1.0, 0.0]
 ```
 
+### Visualize
+
+```console
+$ python compiler.py examples/lm.jisp --viz --json
+wrote examples/lm.py
+wrote examples/lm.model.json
+wrote examples/lm.html
+```
+
+`--viz` writes a self-contained interactive HTML explorer (no dependencies, no
+server): a collapsible tree with one node per *source* block — `repeat` is a
+single node with multiplied params — so it stays small for arbitrarily large
+models. Each node shows its dims, exact parameter count (computed statically),
+and share-of-model meter; light/dark themes included. `--json` writes the same
+structural summary as plain JSON for your own tooling, and it's also embedded
+in the HTML. The counts are exact: a test asserts they equal what `init_*`
+actually allocates under JAX.
+
 Params are ordinary pytrees and the generated functions are pure, so `grad`,
 `vmap`, optax optimizers, and orbax checkpointing all apply directly. Every
 public apply function ships wrapped in `@jax.jit` (internals are inlined at

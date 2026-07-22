@@ -50,6 +50,8 @@ use Racket-style hyphens (attn-block); they become underscores in the
 generated Python. ';' starts a line comment.
 """
 
+import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -132,7 +134,22 @@ def _valid_name(name):
 
 def compile_source(source):
     """Compile jisp DSL source to Python module source."""
+    return _compile(source)[0]
+
+
+def model_summary(source):
+    """Compile source; return a JSON-able structural summary of the models.
+
+    Node schema: kind, in, out, params (exact count), kind-specific fields,
+    and children for combinators. repeat is a single node with multiplied
+    params, so the tree size tracks the source, not the unrolled model.
+    """
+    return _compile(source)[1]
+
+
+def _compile(source):
     defs = []
+    summaries = []
     helpers = set()
     registry = {}
     mangled_names = set()
@@ -165,7 +182,7 @@ def compile_source(source):
                 f"(both become '{mangled}' in Python)"
             )
         mangled_names.add(mangled)
-        block_defs, in_dim, out_dim, block_helpers, entry = _compile_block(
+        block_defs, node, block_helpers, entry = _compile_block(
             mangled, block, dim_env, registry
         )
         if entry != mangled:
@@ -177,7 +194,8 @@ def init_{mangled}(key):
 def {mangled}(params, x):
     return {entry}(params, x)
 ''']
-        registry[name] = (in_dim, out_dim, mangled)
+        registry[name] = (node, mangled)
+        summaries.append({"name": name, "mangled": mangled, "node": node})
         # jit the public apply function only: sub-blocks are inlined when it
         # traces, and init functions run once, so neither benefits.
         block_defs = [
@@ -192,7 +210,7 @@ def {mangled}(params, x):
     if not defs:
         raise CompileError("no forms to compile")
     public = [
-        fn for _, _, mangled in registry.values()
+        fn for _, mangled in registry.values()
         for fn in (f"init_{mangled}", mangled)
     ]
     exports = "\n".join(f'    "{fn}",' for fn in public)
@@ -201,7 +219,11 @@ def {mangled}(params, x):
         if helper in helpers:
             parts.append(HELPERS[helper])
     parts.extend(defs)
-    return "\n".join(parts)
+    summary = {
+        "defines": summaries,
+        "total_params": sum(d["node"]["params"] for d in summaries),
+    }
+    return "\n".join(parts), summary
 
 
 def _is_keyword(value):
@@ -285,15 +307,22 @@ def _resolve_dim(form, dim_env):
 
 
 def _compile_block(name, block, dim_env, registry):
-    """Compile one block; return (defs, in_dim, out_dim, helpers, entry).
+    """Compile one block; return (defs, node, helpers, entry).
 
     entry is the function name call sites should use: name for structural
     blocks, the referenced define's own name for block references.
     """
     match block:
         case str() as ref if ref in registry:
-            in_dim, out_dim, mangled = registry[ref]
-            return [], in_dim, out_dim, set(), mangled
+            ref_node, mangled = registry[ref]
+            node = {
+                "kind": "ref",
+                "ref": ref,
+                "in": ref_node["in"],
+                "out": ref_node["out"],
+                "params": ref_node["params"],
+            }
+            return [], node, set(), mangled
         case str() as ref:
             raise CompileError(f"undefined block '{ref}'")
         case ["mlp", *args]:
@@ -397,7 +426,15 @@ def {_init_of(name)}(key):
 def {name}(params, x):
 {body}
 '''
-    return [defs], dims[0], dims[-1], {"dense_bias" if use_bias else "dense"}
+    params = sum(
+        dims[i] * dims[i + 1] + (dims[i + 1] if use_bias else 0)
+        for i in range(n_layers)
+    )
+    node = {
+        "kind": "mlp", "in": dims[0], "out": dims[-1], "dims": dims,
+        "activation": activation, "bias": use_bias, "params": params,
+    }
+    return [defs], node, {"dense_bias" if use_bias else "dense"}
 
 
 def _compile_layernorm(name, dim):
@@ -412,7 +449,8 @@ def {name}(params, x):
     var = x.var(axis=-1, keepdims=True)
     return scale * (x - mean) / jnp.sqrt(var + 1e-5) + shift
 '''
-    return [defs], dim, dim, set()
+    node = {"kind": "layernorm", "in": dim, "out": dim, "params": 2 * dim}
+    return [defs], node, set()
 
 
 def _compile_embedding(name, vocab, dim):
@@ -424,7 +462,11 @@ def {_init_of(name)}(key):
 def {name}(params, x):
     return params[x]
 '''
-    return [defs], "tokens", dim, set()
+    node = {
+        "kind": "embedding", "in": "tokens", "out": dim,
+        "vocab": vocab, "params": vocab * dim,
+    }
+    return [defs], node, set()
 
 
 def _compile_attention(name, dim, heads, causal):
@@ -450,17 +492,21 @@ def {name}(params, x):
 {mask}    out = jax.nn.softmax(scores, axis=-1) @ v
     return _merge_heads(out) @ Wo
 '''
-    return [defs], dim, dim, {"attention"}
+    node = {
+        "kind": "attention", "in": dim, "out": dim, "heads": heads,
+        "causal": causal, "params": 4 * dim * dim,
+    }
+    return [defs], node, {"attention"}
 
 
 def _compile_residual(name, block, dim_env, registry):
-    defs, sub_in, sub_out, helpers, entry = _compile_block(
+    defs, sub_node, helpers, entry = _compile_block(
         _sub_name(name, "inner"), block, dim_env, registry
     )
-    if sub_in != sub_out:
+    if sub_node["in"] != sub_node["out"]:
         raise CompileError(
             f"residual requires matching in/out dims in {name}, "
-            f"got {sub_in} -> {sub_out}"
+            f"got {sub_node['in']} -> {sub_node['out']}"
         )
     defs = defs + [f'''
 def {_init_of(name)}(key):
@@ -470,17 +516,21 @@ def {_init_of(name)}(key):
 def {name}(params, x):
     return x + {entry}(params, x)
 ''']
-    return defs, sub_in, sub_out, helpers, name
+    node = {
+        "kind": "residual", "in": sub_node["in"], "out": sub_node["out"],
+        "params": sub_node["params"], "children": [sub_node],
+    }
+    return defs, node, helpers, name
 
 
 def _compile_repeat(name, count, block, dim_env, registry):
-    defs, sub_in, sub_out, helpers, entry = _compile_block(
+    defs, sub_node, helpers, entry = _compile_block(
         _sub_name(name, "body"), block, dim_env, registry
     )
-    if sub_in != sub_out:
+    if sub_node["in"] != sub_node["out"]:
         raise CompileError(
             f"repeat requires matching in/out dims in {name}, "
-            f"got {sub_in} -> {sub_out}"
+            f"got {sub_node['in']} -> {sub_node['out']}"
         )
     defs = defs + [f'''
 def {_init_of(name)}(key):
@@ -492,27 +542,33 @@ def {name}(params, x):
         x = {entry}(layer_params, x)
     return x
 ''']
-    return defs, sub_in, sub_out, helpers, name
+    node = {
+        "kind": "repeat", "count": count, "in": sub_node["in"],
+        "out": sub_node["out"], "params": count * sub_node["params"],
+        "children": [sub_node],
+    }
+    return defs, node, helpers, name
 
 
 def _compile_chain(name, blocks, dim_env, registry):
     defs = []
     helpers = set()
-    dims = []
+    children = []
     entries = []
     for i, sub_block in enumerate(blocks):
-        sub_defs, sub_in, sub_out, sub_helpers, entry = _compile_block(
+        sub_defs, sub_node, sub_helpers, entry = _compile_block(
             _sub_name(name, f"layer{i}"), sub_block, dim_env, registry
         )
         defs.extend(sub_defs)
         helpers |= sub_helpers
-        dims.append((sub_in, sub_out))
+        children.append(sub_node)
         entries.append(entry)
-    for i in range(len(dims) - 1):
-        if dims[i][1] != dims[i + 1][0]:
+    for i in range(len(children) - 1):
+        if children[i]["out"] != children[i + 1]["in"]:
             raise CompileError(
                 f"chain dimension mismatch in {name}: layer {i} outputs "
-                f"{dims[i][1]} but layer {i + 1} expects {dims[i + 1][0]}"
+                f"{children[i]['out']} but layer {i + 1} expects "
+                f"{children[i + 1]['in']}"
             )
     inits = ", ".join(f"{_init_of(e)}(keys[{i}])" for i, e in enumerate(entries))
     applies = "\n".join(
@@ -528,25 +584,53 @@ def {name}(params, x):
 {applies}
     return x
 ''')
-    return defs, dims[0][0], dims[-1][1], helpers, name
+    node = {
+        "kind": "chain", "in": children[0]["in"], "out": children[-1]["out"],
+        "params": sum(c["params"] for c in children), "children": children,
+    }
+    return defs, node, helpers, name
 
 
 def main():
-    if len(sys.argv) not in (2, 3):
-        print("usage: python compiler.py model.jisp [out.py]", file=sys.stderr)
-        sys.exit(2)
-    in_path = sys.argv[1]
-    out_path = sys.argv[2] if len(sys.argv) == 3 else str(Path(in_path).with_suffix(".py"))
+    parser = argparse.ArgumentParser(
+        prog="compiler.py",
+        description="Compile a jisp model definition to a pure-JAX Python module.",
+    )
+    parser.add_argument("input", help="model definition (.jisp)")
+    parser.add_argument("output", nargs="?", help="output .py path (default: input stem + .py)")
+    parser.add_argument(
+        "--json", nargs="?", const=True, metavar="PATH",
+        help="also write a structural summary JSON (default: <stem>.model.json)",
+    )
+    parser.add_argument(
+        "--viz", nargs="?", const=True, metavar="PATH",
+        help="also write an interactive HTML explorer (default: <stem>.html)",
+    )
+    args = parser.parse_args()
+    in_path = Path(args.input)
+    out_path = args.output or str(in_path.with_suffix(".py"))
     with open(in_path) as f:
         source = f.read()
     try:
-        output = compile_source(source)
+        output, summary = _compile(source)
     except (ParseError, CompileError) as exc:
         print(f"compile error: {exc}", file=sys.stderr)
         sys.exit(1)
     with open(out_path, "w") as f:
         f.write(output)
     print(f"wrote {out_path}")
+    if args.json:
+        json_path = str(in_path.with_suffix(".model.json")) if args.json is True else args.json
+        with open(json_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"wrote {json_path}")
+    if args.viz:
+        from viz import render_html
+
+        viz_path = str(in_path.with_suffix(".html")) if args.viz is True else args.viz
+        with open(viz_path, "w") as f:
+            f.write(render_html(summary, title=f"jexprlisp · {in_path.name}"))
+        print(f"wrote {viz_path}")
 
 
 if __name__ == "__main__":

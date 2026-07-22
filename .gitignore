@@ -13,3 +13,5 @@ examples/*.py
 .superpowers/
 uv.lock
 docs/superpowers/
+examples/*.html
+examples/*.model.json

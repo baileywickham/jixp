@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from compiler import CompileError, compile_source
+from compiler import CompileError, compile_source, model_summary
 
 MLP_SRC = "(define model (mlp 784 [256 256] 10))"
 
@@ -589,3 +589,65 @@ def test_alias_defines_are_jitted():
     out = compile_source("(define a (layernorm 8)) (define b a)")
     assert "@jax.jit\ndef a(params, x):" in out
     assert "@jax.jit\ndef b(params, x):" in out
+
+
+LM_SRC = """
+(let-dim (vocab 64) (d 16) (heads 4) (layers 3))
+(define block (chain
+  (residual (layernorm d) (attention d heads #:causal))
+  (residual (layernorm d) (mlp d [4d] d))))
+(define lm (chain (embedding vocab d) (repeat layers block) (layernorm d) (mlp d [] vocab)))
+"""
+
+
+def test_summary_structure_and_counts():
+    s = model_summary(LM_SRC)
+    assert [d["name"] for d in s["defines"]] == ["block", "lm"]
+    lm = s["defines"][1]["node"]
+    assert lm["kind"] == "chain" and lm["in"] == "tokens" and lm["out"] == 64
+    emb, rep, ln, head = lm["children"]
+    assert emb["params"] == 64 * 16
+    assert rep["kind"] == "repeat" and rep["count"] == 3
+    assert rep["params"] == 3 * rep["children"][0]["params"]
+    assert ln["params"] == 2 * 16
+    assert head["params"] == 16 * 64
+    assert lm["params"] == sum(c["params"] for c in lm["children"])
+
+
+def test_summary_reference_shares_count_not_params():
+    s = model_summary("(define a (layernorm 8)) (define m (chain a a))")
+    m = s["defines"][1]["node"]
+    assert [c["kind"] for c in m["children"]] == ["ref", "ref"]
+    assert m["params"] == 2 * 16
+
+
+def test_summary_mlp_bias_counted():
+    s = model_summary("(define m (mlp 4 [8] 2 #:bias))")
+    assert s["defines"][0]["node"]["params"] == (4 * 8 + 8) + (8 * 2 + 2)
+
+
+def test_summary_counts_match_jax(tmp_path):
+    jax = pytest.importorskip("jax")
+    s = model_summary(LM_SRC)
+    mod_path = tmp_path / "gen_count.py"
+    mod_path.write_text(compile_source(LM_SRC))
+    spec = importlib.util.spec_from_file_location("gen_count", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for entry in s["defines"]:
+        params = getattr(mod, f"init_{entry['mangled']}")(jax.random.PRNGKey(0))
+        actual = sum(a.size for a in jax.tree.leaves(params))
+        assert actual == entry["node"]["params"], entry["name"]
+
+
+def test_cli_viz_and_json_outputs(tmp_path):
+    import json as _json
+
+    src = tmp_path / "m.jisp"
+    src.write_text("(define m (mlp 4 [8] 2))")
+    result = run_compiler(str(src), "--viz", "--json")
+    assert result.returncode == 0
+    html = (tmp_path / "m.html").read_text()
+    assert "model-data" in html and '"kind"' in html
+    data = _json.loads((tmp_path / "m.model.json").read_text())
+    assert data["total_params"] == 4 * 8 + 8 * 2
