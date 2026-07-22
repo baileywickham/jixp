@@ -1,9 +1,9 @@
 """Train a jixp-compiled MLP on MNIST.
 
-1. compile the DSL:   python compiler.py examples/mnist.jisp
-2. run this script:   uv run --with jax python examples/train_mnist.py
+1. compile the DSL:   python compiler.py examples/mnist/mnist.jisp
+2. run this script:   uv run --with jax python examples/mnist/train.py
 
-Downloads MNIST (~11 MB, four IDX files) into examples/data/mnist/ on the
+Downloads MNIST (~11 MB, four IDX files) into examples/mnist/data/mnist/ on the
 first run. Dependency-free besides jax/numpy: hand-rolled cross-entropy and
 SGD with momentum. Expect ~98% test accuracy in three epochs.
 """

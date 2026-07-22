@@ -1,7 +1,7 @@
 """Train a jisp-compiled net on XOR — the full workflow in one file.
 
-1. compile the DSL:   python compiler.py examples/xor.jisp
-2. run this script:   uv run --with jax python examples/train_xor.py
+1. compile the DSL:   python compiler.py examples/xor/xor.jisp
+2. run this script:   uv run --with jax python examples/xor/train.py
 
 The generated module (xor.py) is plain JAX, so jit/grad/tree_map all
 apply directly; jisp itself is not needed at runtime.

@@ -5,11 +5,12 @@ __pycache__/
 venv/
 .venv/
 
-# generated output (rebuild with: python compiler.py examples/<name>.jisp)
-examples/*.py
-!examples/train_xor.py
-!examples/train_mnist.py
-examples/data/
+# generated output (rebuild with: python compiler.py examples/<name>/<name>.jisp)
+examples/**/*.py
+!examples/*/train.py
+examples/**/data/
+examples/**/*.html
+examples/**/*.model.json
 
 # agent scratch
 .superpowers/

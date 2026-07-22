@@ -12,7 +12,7 @@ jixp is three small pieces, each built on the last:
    The compiler evaluates dimension expressions with the interpreter from step 2.
 
 ```lisp
-; examples/transformer.jisp
+; examples/transformer/transformer.jisp
 (let-dim
   (d 128) (heads 8) (layers 4))
 
@@ -26,8 +26,8 @@ jixp is three small pieces, each built on the last:
 ```
 
 ```console
-$ python compiler.py examples/transformer.jisp
-wrote examples/transformer.py
+$ python compiler.py examples/transformer/transformer.jisp
+wrote examples/transformer/transformer.py
 ```
 
 The output is readable, framework-free JAX — every `define` becomes a pair of
@@ -64,12 +64,12 @@ JAX code — jixp is a build step, never a runtime dependency. A complete
 train-XOR example lives in `examples/`:
 
 ```lisp
-; examples/xor.jisp
+; examples/xor/xor.jisp
 (define net (mlp 2 [8 8] 1 #:activation tanh))
 ```
 
 ```python
-# examples/train_xor.py (abridged)
+# examples/xor/train.py (abridged)
 import xor                                    # the generated module
 
 params = xor.init_net(jax.random.PRNGKey(0))
@@ -84,8 +84,8 @@ def step(params):
 ```
 
 ```console
-$ python compiler.py examples/xor.jisp
-$ uv run --with jax python examples/train_xor.py
+$ python compiler.py examples/xor/xor.jisp
+$ uv run --with jax python examples/xor/train.py
 step    0  loss 1.472630
 step 2000  loss 0.000000
 predictions: [0.0, 1.0, 1.0, 0.0]
@@ -94,10 +94,10 @@ predictions: [0.0, 1.0, 1.0, 0.0]
 ### Visualize
 
 ```console
-$ python compiler.py examples/lm.jisp --viz --json
-wrote examples/lm.py
-wrote examples/lm.model.json
-wrote examples/lm.html
+$ python compiler.py examples/lm/lm.jisp --viz --json
+wrote examples/lm/lm.py
+wrote examples/lm/lm.model.json
+wrote examples/lm/lm.html
 ```
 
 `--viz` writes a self-contained interactive HTML explorer (no dependencies, no
@@ -109,9 +109,9 @@ structural summary as plain JSON for your own tooling, and it's also embedded
 in the HTML. The counts are exact: a test asserts they equal what `init_*`
 actually allocates under JAX.
 
-There's also a real-data version of the same pattern: `examples/mnist.jisp`
+There's also a real-data version of the same pattern: `examples/mnist/mnist.jisp`
 (one line: `(define classifier (mlp 784 [256 128] 10 #:bias))`) with
-`examples/train_mnist.py` — downloads MNIST, hand-rolled cross-entropy and
+`examples/mnist/train.py` — downloads MNIST, hand-rolled cross-entropy and
 SGD-with-momentum, ~98% test accuracy in three epochs on CPU.
 
 Params are ordinary pytrees and the generated functions are pure, so `grad`,
