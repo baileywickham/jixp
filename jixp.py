@@ -1,4 +1,4 @@
-"""jisp: a minimal Lisp interpreter — s-expression parser and evaluator."""
+"""jixp: a minimal Lisp interpreter — s-expression parser and evaluator."""
 
 import operator
 import sys
@@ -142,7 +142,7 @@ def exec(forms, env=None):
 
 def main():
     if len(sys.argv) != 2:
-        print("usage: python jisp.py file.jisp", file=sys.stderr)
+        print("usage: python jixp.py file.jixp", file=sys.stderr)
         sys.exit(2)
     with open(sys.argv[1]) as f:
         source = f.read()

@@ -1,6 +1,6 @@
 """Train a jixp-compiled MLP on MNIST.
 
-1. compile the DSL:   python compiler.py examples/mnist/mnist.jisp
+1. compile the DSL:   python compiler.py examples/mnist/mnist.jixp
 2. run this script:   uv run --with jax python examples/mnist/train.py
 
 Downloads MNIST (~11 MB, four IDX files) into examples/mnist/data/mnist/ on the

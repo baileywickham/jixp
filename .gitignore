@@ -5,7 +5,7 @@ __pycache__/
 venv/
 .venv/
 
-# generated output (rebuild with: python compiler.py examples/<name>/<name>.jisp)
+# generated output (rebuild with: python compiler.py examples/<name>/<name>.jixp)
 examples/**/*.py
 !examples/*/train.py
 examples/**/data/

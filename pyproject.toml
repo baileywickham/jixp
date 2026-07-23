@@ -1,5 +1,5 @@
 [project]
-name = "jisp"
+name = "jixp"
 version = "0.1.0"
 description = "A tiny Lisp that compiles neural network definitions to pure-JAX Python"
 readme = "README.md"
@@ -11,4 +11,4 @@ dependencies = []
 dev = ["pytest", "jax", "mlx"]
 
 [tool.pytest.ini_options]
-testpaths = ["test_jisp.py", "test_compiler.py"]
+testpaths = ["test_jixp.py", "test_compiler.py"]

@@ -1,6 +1,6 @@
 """Train the jixp-compiled GPT on tiny-shakespeare, byte-level.
 
-1. compile the DSL:   python compiler.py examples/gpt/gpt.jisp
+1. compile the DSL:   python compiler.py examples/gpt/gpt.jixp
 2. run this script:   uv run --with jax python examples/gpt/train.py
 
 Downloads tiny-shakespeare (~1.1 MB) into examples/gpt/data/ on the first run.
@@ -92,7 +92,7 @@ def main():
     args = parser.parse_args()
     assert args.seq <= gpt.DIMS["block_size"], (
         f"--seq {args.seq} exceeds the compiled block size "
-        f"{gpt.DIMS['block_size']} (edit gpt.jisp and recompile)"
+        f"{gpt.DIMS['block_size']} (edit gpt.jixp and recompile)"
     )
 
     tokens = load_tokens()

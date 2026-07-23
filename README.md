@@ -1,18 +1,18 @@
 # jixp
 
 A tiny Lisp that compiles neural network definitions to pure-[JAX](https://github.com/jax-ml/jax) Python.
-(The language and file extension are `jisp` — j-expressions.)
+(The language and file extension are `jixp` — j-expressions.)
 
 jixp is three small pieces, each built on the last:
 
-1. **A parser** (`jisp.py`) — s-expressions to plain Python lists/tuples.
-2. **An evaluator** (`jisp.py`) — a minimal Lisp: `quote`, `if`, `define`, `lambda`, arithmetic.
+1. **A parser** (`jixp.py`) — s-expressions to plain Python lists/tuples.
+2. **An evaluator** (`jixp.py`) — a minimal Lisp: `quote`, `if`, `define`, `lambda`, arithmetic.
 3. **A compiler** (`compiler.py`) — a JAX DSL: describe a model as s-expressions, get a
    dependency-free Python module of `init_*(key)` / `apply(params, x)` functions.
    The compiler evaluates dimension expressions with the interpreter from step 2.
 
 ```lisp
-; examples/gpt/gpt.jisp — a GPT-2-style decoder: learned positional
+; examples/gpt/gpt.jixp — a GPT-2-style decoder: learned positional
 ; embeddings, pre-LN blocks, biased gelu MLPs; byte-level (the 256 byte
 ; values are the vocab), token ids (batch, seq) -> logits
 (let-dim
@@ -37,7 +37,7 @@ jixp is three small pieces, each built on the last:
 ```
 
 ```console
-$ python compiler.py examples/gpt/gpt.jisp
+$ python compiler.py examples/gpt/gpt.jixp
 wrote examples/gpt/gpt.py
 ```
 
@@ -78,12 +78,12 @@ logits = gpt.gpt(params, tokens)  # tokens: int (batch, seq) -> (batch, seq, 256
 
 ## Workflow
 
-Write the `.jisp`, compile it, and import the generated module into ordinary
+Write the `.jixp`, compile it, and import the generated module into ordinary
 JAX code — jixp is a build step, never a runtime dependency. A complete
 train-XOR example lives in `examples/`:
 
 ```lisp
-; examples/xor/xor.jisp
+; examples/xor/xor.jixp
 (define net (mlp 2 [8 8] 1 #:activation tanh))
 ```
 
@@ -103,7 +103,7 @@ def step(params):
 ```
 
 ```console
-$ python compiler.py examples/xor/xor.jisp
+$ python compiler.py examples/xor/xor.jixp
 $ uv run --with jax python examples/xor/train.py
 step    0  loss 1.472630
 step 2000  loss 0.000000
@@ -113,7 +113,7 @@ predictions: [0.0, 1.0, 1.0, 0.0]
 ### Visualize
 
 ```console
-$ python compiler.py examples/lm/lm.jisp --viz --json
+$ python compiler.py examples/lm/lm.jixp --viz --json
 wrote examples/lm/lm.py
 wrote examples/lm/lm.model.json
 wrote examples/lm/lm.html
@@ -133,7 +133,7 @@ structural summary as plain JSON for your own tooling, and it's also embedded
 in the HTML. The counts are exact: a test asserts they equal what `init_*`
 actually allocates under JAX.
 
-There are also real-data versions of the same pattern: `examples/mnist/mnist.jisp`
+There are also real-data versions of the same pattern: `examples/mnist/mnist.jixp`
 (one line: `(define classifier (mlp 784 [256 128] 10 #:bias))`) with
 `examples/mnist/train.py` — downloads MNIST, hand-rolled cross-entropy and
 SGD-with-momentum, ~98% test accuracy in three epochs on CPU — and
@@ -152,7 +152,7 @@ trace time); use `jax.disable_jit()` when you want to step through eagerly.
 dialect, which runs on the GPU on Apple silicon:
 
 ```console
-$ python compiler.py examples/gpt/gpt.jisp --target mlx
+$ python compiler.py examples/gpt/gpt.jixp --target mlx
 ```
 
 The output is structurally identical — `import mlx.core as mx`, `@mx.compile`
@@ -211,7 +211,7 @@ before any Python runs.
 `let-dim` bindings are also exported into the generated module as a `DIMS`
 dict (hyphens mangled to underscores), so training scripts next to the model
 can read `gpt.DIMS["block_size"]` instead of re-hardcoding values — the
-`.jisp` file stays the single source of truth.
+`.jixp` file stays the single source of truth.
 
 ### Syntax notes
 
@@ -227,7 +227,7 @@ can read `gpt.DIMS["block_size"]` instead of re-hardcoding values — the
 The interpreter that powers dim expressions also stands alone:
 
 ```console
-$ python jisp.py program.jisp
+$ python jixp.py program.jixp
 ```
 
 ```lisp
