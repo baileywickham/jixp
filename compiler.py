@@ -6,6 +6,10 @@ DSL (top-level forms):
                                      bindings may reference earlier ones.
                                      Flat pairs also work:
                                      (let-dim <name> <dim> ...)
+                                     Bindings are exported into the generated
+                                     module as DIMS = {"name": value, ...}
+                                     (hyphens become underscores), so training
+                                     scripts can read e.g. DIMS["block_size"]
     (define <name> <block>)
 
 A block position also accepts the name of an earlier define, compiling to
@@ -28,6 +32,10 @@ valued (#:activation gelu) or bare flags (#:causal).
                                      -> (..., seq, dim); its input is the
                                      pseudo-dim "tokens", so it can only
                                      start a model, never continue one
+    (pos-embedding <max-seq> <dim>)   learned positional table added to the
+                                     input: x + params[:seq] over
+                                     (..., seq, dim); max-seq bounds the
+                                     sequence length the weights support
     (attention <dim> <heads> #:causal?)
                                      multi-head self-attention over
                                      (..., seq, dim); the optional #:causal
@@ -156,6 +164,7 @@ def _compile(source):
     helpers = set()
     registry = {}
     mangled_names = set()
+    user_dims = {}
     dim_env = _DimEnv(standard_env())
     for form in parse(source):
         match form:
@@ -167,7 +176,13 @@ def _compile(source):
                         )
                     if name in dim_env:
                         raise CompileError(f"duplicate let-dim: {name}")
+                    if _mangle(name) in user_dims:
+                        raise CompileError(
+                            f"let-dim '{name}' collides with an earlier let-dim "
+                            f"(both become '{_mangle(name)}' in DIMS)"
+                        )
                     dim_env[name] = _resolve_dim(value, dim_env)
+                    user_dims[_mangle(name)] = dim_env[name]
                 continue
             case ["define", str() as name, block] if _valid_name(name):
                 pass
@@ -218,6 +233,9 @@ def {mangled}(params, x):
     ]
     exports = "\n".join(f'    "{fn}",' for fn in public)
     parts = [HEADER, f"\n__all__ = [\n{exports}\n]\n"]
+    if user_dims:
+        entries = ", ".join(f'"{k}": {v}' for k, v in user_dims.items())
+        parts.append(f"\nDIMS = {{{entries}}}\n")
     for helper in ("dense", "dense_bias", "attention"):
         if helper in helpers:
             parts.append(HELPERS[helper])
@@ -348,6 +366,18 @@ def _compile_block(name, block, dim_env, registry):
             vocab = _resolve_dim(vocab_form, dim_env)
             dim = _resolve_dim(dim_form, dim_env)
             return (*_compile_embedding(name, vocab, dim), name)
+        case ["pos-embedding", *args]:
+            match args:
+                case [max_form, dim_form]:
+                    pass
+                case _:
+                    raise CompileError(
+                        f"pos-embedding expects (pos-embedding <max-seq> <dim>), "
+                        f"got {args!r}"
+                    )
+            max_seq = _resolve_dim(max_form, dim_env)
+            dim = _resolve_dim(dim_form, dim_env)
+            return (*_compile_pos_embedding(name, max_seq, dim), name)
         case ["attention", *args]:
             positionals, options = _parse_options(args, {"#:causal": "flag"}, "attention")
             match positionals:
@@ -509,6 +539,22 @@ def {name}(params, x):
     node = {
         "kind": "embedding", "in": "tokens", "out": dim,
         "vocab": vocab, "params": vocab * dim,
+    }
+    return [defs], node, set()
+
+
+def _compile_pos_embedding(name, max_seq, dim):
+    defs = f'''
+def {_init_of(name)}(key):
+    return jax.random.normal(key, ({max_seq}, {dim})) * 0.02
+
+
+def {name}(params, x):
+    return x + params[: x.shape[-2]]
+'''
+    node = {
+        "kind": "pos-embedding", "in": dim, "out": dim,
+        "max_seq": max_seq, "params": max_seq * dim,
     }
     return [defs], node, set()
 

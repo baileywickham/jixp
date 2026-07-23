@@ -563,6 +563,90 @@ def test_generated_lm_pipeline_runs_under_jax(tmp_path):
     assert bool(jax.numpy.isfinite(logits).all())
 
 
+def test_let_dim_bindings_exported_as_dims():
+    out = compile_source(
+        "(let-dim (d 16) (block-size 8) (ffn (* 4 d))) (define m (layernorm d))"
+    )
+    assert 'DIMS = {"d": 16, "block_size": 8, "ffn": 64}' in out
+    compile(out, "<generated>", "exec")
+
+
+def test_no_let_dim_means_no_dims_export():
+    assert "DIMS" not in compile_source(MLP_SRC)
+
+
+def test_let_dim_mangled_collision_raises():
+    with pytest.raises(CompileError, match="collides"):
+        compile_source(
+            "(let-dim (a-b 4) (a_b 8)) (define m (layernorm a-b))"
+        )
+
+
+def test_pos_embedding_emits_table_and_slice():
+    out = compile_source("(define pos (pos-embedding 256 32))")
+    assert "jax.random.normal(key, (256, 32)) * 0.02" in out
+    assert "return x + params[: x.shape[-2]]" in out
+    compile(out, "<generated>", "exec")
+
+
+def test_pos_embedding_is_dim_preserving_in_chain():
+    out = compile_source(
+        "(define m (chain (embedding 100 32) (pos-embedding 64 32) (layernorm 32)))"
+    )
+    assert "def init_m(key):" in out
+
+
+def test_pos_embedding_participates_in_chain_dim_check():
+    with pytest.raises(CompileError, match="mismatch"):
+        compile_source("(define m (chain (embedding 100 32) (pos-embedding 64 16)))")
+
+
+def test_pos_embedding_max_seq_can_be_dim_expression():
+    out = compile_source(
+        "(let-dim (d 16) (block-size 12)) (define pos (pos-embedding (* 2 block-size) d))"
+    )
+    assert "jax.random.normal(key, (24, 16)) * 0.02" in out
+
+
+def test_pos_embedding_bad_args_raise():
+    with pytest.raises(CompileError, match="pos-embedding expects"):
+        compile_source("(define pos (pos-embedding 64))")
+
+
+def test_summary_pos_embedding_params():
+    s = model_summary("(define pos (pos-embedding 64 16))")
+    node = s["defines"][0]["node"]
+    assert node["kind"] == "pos-embedding"
+    assert node["in"] == 16 and node["out"] == 16
+    assert node["max_seq"] == 64
+    assert node["params"] == 64 * 16
+
+
+def test_generated_pos_embedding_runs_under_jax(tmp_path):
+    jax = pytest.importorskip("jax")
+    src = """
+    (let-dim (vocab 50) (d 16) (block-size 8))
+    (define lm (chain
+      (embedding vocab d)
+      (pos-embedding block-size d)
+      (residual (layernorm d) (attention d 4 #:causal))
+      (layernorm d)
+      (mlp d [] vocab)))
+    """
+    mod_path = tmp_path / "gen_pos.py"
+    mod_path.write_text(compile_source(src))
+    spec = importlib.util.spec_from_file_location("gen_pos", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    params = mod.init_lm(jax.random.PRNGKey(0))
+    # seq shorter than block-size: the table slice must broadcast cleanly
+    tokens = jax.numpy.array([[3, 3, 3, 3], [3, 3, 3, 3]])
+    logits = mod.lm(params, tokens)
+    assert logits.shape == (2, 4, 50)
+    # identical tokens at different positions must yield different logits
+    assert not jax.numpy.allclose(logits[0, 0], logits[0, 1], atol=1e-6)
+
+
 def test_mlp_bias_flag_emits_bias_pairs():
     out = compile_source("(define m (mlp 8 [16] 4 #:bias))")
     assert "_init_dense_bias(keys[0], 8, 16)" in out

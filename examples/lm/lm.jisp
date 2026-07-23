@@ -1,5 +1,6 @@
 ; a tiny GPT-shaped language model: token ids (batch, seq) -> logits
-; (no positional encoding yet — rope is on the roadmap)
+; (no positional encoding — rope is on the roadmap; examples/gpt uses
+;  a learned pos-embedding instead)
 (let-dim
   (vocab 256)
   (d 128)

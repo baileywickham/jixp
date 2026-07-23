@@ -141,6 +141,7 @@ Blocks:
 | `(layernorm dim)` | layer normalization with scale and shift |
 | `(rmsnorm dim #:no-scale?)` | RMS normalization with learnable scale; `#:no-scale` makes it parameter-free |
 | `(embedding vocab dim)` | lookup table: int token ids `(..., seq)` → `(..., seq, dim)`; only valid at the start of a model |
+| `(pos-embedding max-seq dim)` | learned positional table added to the input: `x + params[:seq]`; `max-seq` bounds the sequence length the weights support |
 | `(attention dim heads #:causal?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions |
 | `(chain block...)` | sequential composition |
 | `(residual block...)` | `x + body(x)`; body must preserve dim |
@@ -167,6 +168,11 @@ Dims must resolve to positive integers at compile time, which buys static shape
 checking: `chain` verifies adjacent blocks agree, `residual`/`repeat` require
 dim-preserving bodies, and `attention` requires `heads` to divide `dim` — all
 before any Python runs.
+
+`let-dim` bindings are also exported into the generated module as a `DIMS`
+dict (hyphens mangled to underscores), so training scripts next to the model
+can read `gpt.DIMS["block_size"]` instead of re-hardcoding values — the
+`.jisp` file stays the single source of truth.
 
 ### Syntax notes
 
