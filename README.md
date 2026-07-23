@@ -12,49 +12,68 @@ jixp is three small pieces, each built on the last:
    The compiler evaluates dimension expressions with the interpreter from step 2.
 
 ```lisp
-; examples/transformer/transformer.jisp
+; examples/gpt/gpt.jisp — a GPT-2-style decoder: learned positional
+; embeddings, pre-LN blocks, biased gelu MLPs; byte-level (the 256 byte
+; values are the vocab), token ids (batch, seq) -> logits
 (let-dim
-  (d 128) (heads 8) (layers 4))
+  (vocab 256)
+  (d 128)
+  (heads 8)
+  (layers 4)
+  (block-size 512))
 
 (define block (chain
   (residual (layernorm d)
             (attention d heads #:causal))
   (residual (layernorm d)
-            (mlp d [4d] d))))
+            (mlp d [4d] d #:bias))))
 
-(define encoder (repeat layers block))
+(define gpt (chain
+  (embedding vocab d)
+  (pos-embedding block-size d)
+  (repeat layers block)
+  (layernorm d)
+  (mlp d [] vocab)))
 ```
 
 ```console
-$ python compiler.py examples/transformer/transformer.jisp
-wrote examples/transformer/transformer.py
+$ python compiler.py examples/gpt/gpt.jisp
+wrote examples/gpt/gpt.py
 ```
 
 The output is readable, framework-free JAX — every `define` becomes a pair of
-functions, dims baked in as literals:
+functions, dims baked in as literals (abridged):
 
 ```python
 __all__ = [
     "init_block", "block",
-    "init_encoder", "encoder",
+    "init_gpt", "gpt",
 ]
 
-def init_encoder(key):
-    return [init_block(k) for k in jax.random.split(key, 4)]
+DIMS = {"vocab": 256, "d": 128, "heads": 8, "layers": 4, "block_size": 512}
+
+
+def _gpt_layer2(params, x):
+    for layer_params in params:
+        x = block(layer_params, x)
+    return x
 
 
 @jax.jit
-def encoder(params, x):
-    for layer_params in params:
-        x = block(layer_params, x)
+def gpt(params, x):
+    x = _gpt_layer0(params[0], x)
+    x = _gpt_layer1(params[1], x)
+    x = _gpt_layer2(params[2], x)
+    x = _gpt_layer3(params[3], x)
+    x = _gpt_layer4(params[4], x)
     return x
 ```
 
 ```python
-import jax, transformer as t
+import jax, gpt
 
-params = t.init_encoder(jax.random.PRNGKey(0))
-y = t.encoder(params, x)          # x: (batch, seq, 128)
+params = gpt.init_gpt(jax.random.PRNGKey(0))
+logits = gpt.gpt(params, tokens)  # tokens: int (batch, seq) -> (batch, seq, 256)
 ```
 
 ## Workflow
@@ -114,10 +133,13 @@ structural summary as plain JSON for your own tooling, and it's also embedded
 in the HTML. The counts are exact: a test asserts they equal what `init_*`
 actually allocates under JAX.
 
-There's also a real-data version of the same pattern: `examples/mnist/mnist.jisp`
+There are also real-data versions of the same pattern: `examples/mnist/mnist.jisp`
 (one line: `(define classifier (mlp 784 [256 128] 10 #:bias))`) with
 `examples/mnist/train.py` — downloads MNIST, hand-rolled cross-entropy and
-SGD-with-momentum, ~98% test accuracy in three epochs on CPU.
+SGD-with-momentum, ~98% test accuracy in three epochs on CPU — and
+`examples/gpt/train.py`, which trains the GPT from the top of this README on
+tiny-shakespeare byte-by-byte (hand-rolled Adam, ~0.9M params) and samples
+from it.
 
 Params are ordinary pytrees and the generated functions are pure, so `grad`,
 `vmap`, optax optimizers, and orbax checkpointing all apply directly. Every
