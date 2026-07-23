@@ -1,0 +1,21 @@
+; a GPT-2-style decoder: learned positional embeddings, pre-LN blocks,
+; biased gelu MLPs — token ids (batch, seq) -> logits, seq <= block-size
+(let-dim
+  (vocab 256)
+  (d 128)
+  (heads 8)
+  (layers 4)
+  (block-size 512))
+
+(define block (chain
+  (residual (layernorm d)
+            (attention d heads #:causal))
+  (residual (layernorm d)
+            (mlp d [4d] d #:bias))))
+
+(define gpt (chain
+  (embedding vocab d)
+  (pos-embedding block-size d)
+  (repeat layers block)
+  (layernorm d)
+  (mlp d [] vocab)))
