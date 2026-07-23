@@ -64,6 +64,8 @@ function Detail({ n }: { n: ModelNode }) {
       return <span className={dims}>d={n.out}{n.scale ? "" : " · no scale"}</span>;
     case "embedding":
       return <span className={dims}>vocab={n.vocab} → d={n.out}</span>;
+    case "pos-embedding":
+      return <span className={dims}>max seq={n.max_seq} · d={n.out}</span>;
     case "attention":
       return (
         <>

@@ -29,6 +29,11 @@ export interface EmbeddingNode extends BaseNode {
   vocab: number;
 }
 
+export interface PosEmbeddingNode extends BaseNode {
+  kind: "pos-embedding";
+  max_seq: number;
+}
+
 export interface AttentionNode extends BaseNode {
   kind: "attention";
   heads: number;
@@ -61,6 +66,7 @@ export type ModelNode =
   | LayernormNode
   | RmsnormNode
   | EmbeddingNode
+  | PosEmbeddingNode
   | AttentionNode
   | ChainNode
   | ResidualNode
