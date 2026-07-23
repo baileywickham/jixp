@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "jax"]
+dev = ["pytest", "jax", "mlx"]
 
 [tool.pytest.ini_options]
 testpaths = ["test_jisp.py", "test_compiler.py"]

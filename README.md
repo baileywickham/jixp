@@ -124,6 +124,23 @@ Params are ordinary pytrees and the generated functions are pure, so `grad`,
 public apply function ships wrapped in `@jax.jit` (internals are inlined at
 trace time); use `jax.disable_jit()` when you want to step through eagerly.
 
+### MLX target
+
+`--target mlx` emits the same module in [MLX](https://github.com/ml-explore/mlx)
+dialect, which runs on the GPU on Apple silicon:
+
+```console
+$ python compiler.py examples/gpt/gpt.jisp --target mlx
+```
+
+The output is structurally identical — `import mlx.core as mx`, `@mx.compile`
+on the public applies, keys from `mx.random.key(seed)` — and numerically
+matches the JAX module (`jax.nn.gelu`'s default tanh approximation maps to
+`mlx.nn.gelu_approx`; a test asserts logit parity). Training code pairs it
+with `mx.value_and_grad` and `mlx.utils.tree_map` instead of `jax.grad` and
+`jax.tree.map`, plus an `mx.eval(params, loss)` per step — MLX is lazy, so
+that's what forces the compute.
+
 ## The DSL
 
 Top-level forms:

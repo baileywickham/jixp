@@ -58,6 +58,12 @@ init_<name>(key) building a params pytree, and <name>(params, x), the
 latter wrapped in @jax.jit (use jax.disable_jit() to debug). Names may
 use Racket-style hyphens (attn-block); they become underscores in the
 generated Python. ';' starts a line comment.
+
+--target mlx emits the same module in MLX dialect for Apple-silicon GPUs:
+mlx.core as mx, @mx.compile on the public applies, keys from
+mx.random.key(seed). Training code pairs it with mx.value_and_grad and
+mlx.utils.tree_map instead of jax.grad and jax.tree.map, and needs an
+mx.eval(...) per step (MLX is lazy).
 """
 
 import argparse
@@ -143,9 +149,47 @@ def _valid_name(name):
     return isinstance(name, str) and _mangle(name).isidentifier()
 
 
-def compile_source(source):
+TARGETS = ("jax", "mlx")
+
+# The emitter's templates are written in the JAX dialect; the MLX target is a
+# rewrite of the finished module. Everything jnp maps to mx by rename; these
+# are the constructs that don't.
+_MLX_RENAMES = [
+    ("import jax\nimport jax.numpy as jnp", "import mlx.core as mx\nimport mlx.nn"),
+    ("@jax.jit", "@mx.compile"),
+    ("jax.random.split", "mx.random.split"),
+    # jax.nn.gelu defaults to the tanh approximation; mlx.nn.gelu is exact erf
+    ("jax.nn.gelu", "mlx.nn.gelu_approx"),
+    ("jax.nn.relu", "mlx.nn.relu"),
+    ("jax.nn.silu", "mlx.nn.silu"),
+    ("jax.nn.sigmoid", "mx.sigmoid"),
+    ("jax.nn.softmax", "mx.softmax"),
+    ("dtype=bool", "dtype=mx.bool_"),
+    ("jnp.", "mx."),
+]
+
+
+def _to_mlx(output):
+    """Rewrite a generated JAX module into its MLX dialect."""
+    # mx.random takes the key as a trailing keyword: normal(shape, key=key)
+    output = re.sub(
+        r"jax\.random\.normal\(([\w\[\]]+), (\([^()]*\))\)",
+        r"mx.random.normal(\2, key=\1)",
+        output,
+    )
+    for old, new in _MLX_RENAMES:
+        output = output.replace(old, new)
+    leftover = re.search(r"^.*\bj(?:ax|np)\b.*$", output, re.MULTILINE)
+    if leftover:
+        raise CompileError(
+            f"internal: no MLX mapping for {leftover.group().strip()!r}"
+        )
+    return output
+
+
+def compile_source(source, target="jax"):
     """Compile jisp DSL source to Python module source."""
-    return _compile(source)[0]
+    return _compile(source, target)[0]
 
 
 def model_summary(source):
@@ -158,7 +202,11 @@ def model_summary(source):
     return _compile(source)[1]
 
 
-def _compile(source):
+def _compile(source, target="jax"):
+    if target not in TARGETS:
+        raise CompileError(
+            f"unknown target {target!r}, expected one of: {' '.join(TARGETS)}"
+        )
     defs = []
     summaries = []
     helpers = set()
@@ -244,7 +292,10 @@ def {mangled}(params, x):
         "defines": summaries,
         "total_params": sum(d["node"]["params"] for d in summaries),
     }
-    return "\n".join(parts), summary
+    output = "\n".join(parts)
+    if target == "mlx":
+        output = _to_mlx(output)
+    return output, summary
 
 
 def _is_keyword(value):
@@ -689,6 +740,10 @@ def main():
     parser.add_argument("input", help="model definition (.jisp)")
     parser.add_argument("output", nargs="?", help="output .py path (default: input stem + .py)")
     parser.add_argument(
+        "--target", choices=TARGETS, default="jax",
+        help="output dialect: pure-JAX (default) or MLX (Apple-silicon GPU)",
+    )
+    parser.add_argument(
         "--json", nargs="?", const=True, metavar="PATH",
         help="also write a structural summary JSON (default: <stem>.model.json)",
     )
@@ -702,7 +757,7 @@ def main():
     with open(in_path) as f:
         source = f.read()
     try:
-        output, summary = _compile(source)
+        output, summary = _compile(source, args.target)
     except (ParseError, CompileError) as exc:
         print(f"compile error: {exc}", file=sys.stderr)
         sys.exit(1)

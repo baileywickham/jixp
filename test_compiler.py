@@ -761,6 +761,132 @@ def test_relu2_activation_emits_square():
     assert "jnp.square(jax.nn.relu(x @ W))" in out
 
 
+def test_default_target_is_jax():
+    assert compile_source(MLP_SRC) == compile_source(MLP_SRC, target="jax")
+
+
+def test_unknown_target_raises():
+    with pytest.raises(CompileError, match="unknown target"):
+        compile_source(MLP_SRC, target="torch")
+
+
+def test_mlx_target_swaps_imports_and_leaves_no_jax():
+    out = compile_source(MLP_SRC, target="mlx")
+    assert "import mlx.core as mx" in out
+    assert "import mlx.nn" in out
+    assert "jax" not in out
+    assert "jnp" not in out
+
+
+def test_mlx_random_calls_use_keyword_key():
+    out = compile_source(MLP_SRC, target="mlx")
+    assert "mx.random.split(key, 3)" in out
+    assert "mx.random.normal((in_dim, out_dim), key=key) * mx.sqrt(2.0 / in_dim)" in out
+
+
+def test_mlx_gelu_uses_tanh_approximation():
+    # jax.nn.gelu defaults to approximate=True; mlx.nn.gelu is exact erf,
+    # so the numerically matching op is mlx.nn.gelu_approx
+    out = compile_source(MLP_SRC, target="mlx")
+    assert "mlx.nn.gelu_approx(x @ W)" in out
+    assert "mlx.nn.gelu(" not in out
+
+
+def test_mlx_activation_map():
+    out = compile_source("(define m (mlp 8 [16] 4 #:activation relu2))", target="mlx")
+    assert "mx.square(mlx.nn.relu(x @ W))" in out
+    out = compile_source("(define m (mlp 8 [16] 4 #:activation sigmoid))", target="mlx")
+    assert "mx.sigmoid(x @ W)" in out
+
+
+def test_mlx_causal_mask():
+    out = compile_source("(define attn (attention 32 4 #:causal))", target="mlx")
+    assert "mx.tril(mx.ones((seq, seq), dtype=mx.bool_))" in out
+    assert "mx.where(mask, scores, -mx.inf)" in out
+
+
+def test_mlx_embedding_and_pos_embedding():
+    out = compile_source(
+        "(define m (chain (embedding 100 32) (pos-embedding 64 32)))", target="mlx"
+    )
+    assert "mx.random.normal((100, 32), key=key) * 0.02" in out
+    assert "return params[x]" in out
+    assert "return x + params[: x.shape[-2]]" in out
+
+
+def test_mlx_public_applies_use_mx_compile():
+    out = compile_source("(define m (chain (layernorm 8) (mlp 8 [16] 8)))", target="mlx")
+    assert "@mx.compile\ndef m(params, x):" in out
+    assert "@mx.compile\ndef _m_layer0" not in out
+    assert "jit" not in out
+
+
+def test_mlx_generated_source_is_valid_python():
+    compile(compile_source(LM_SRC, target="mlx"), "<generated>", "exec")
+
+
+def test_cli_target_mlx(tmp_path):
+    src = tmp_path / "model.jisp"
+    src.write_text("(define model (mlp 4 [8] 2))")
+    result = run_compiler(str(src), "--target", "mlx")
+    assert result.returncode == 0
+    out = (tmp_path / "model.py").read_text()
+    assert "import mlx.core as mx" in out
+    assert "jax" not in out
+
+
+PARITY_SRC = """
+(let-dim (vocab 32) (d 16) (block-size 8))
+(define lm (chain
+  (embedding vocab d)
+  (pos-embedding block-size d)
+  (residual (layernorm d) (attention d 4 #:causal))
+  (residual (rmsnorm d) (mlp d [4d] d #:bias))
+  (layernorm d)
+  (mlp d [] vocab)))
+"""
+
+
+def test_generated_mlx_module_runs_under_mlx(tmp_path):
+    mx = pytest.importorskip("mlx.core")
+    mod_path = tmp_path / "gen_mlx_lm.py"
+    mod_path.write_text(compile_source(PARITY_SRC, target="mlx"))
+    spec = importlib.util.spec_from_file_location("gen_mlx_lm", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    params = mod.init_lm(mx.random.key(0))
+    tokens = mx.array([[1, 2, 3, 4], [5, 6, 7, 8]])
+    logits = mod.lm(params, tokens)
+    mx.eval(logits)
+    assert logits.shape == (2, 4, 32)
+    assert bool(mx.isfinite(logits).all())
+
+
+def test_mlx_output_matches_jax_numerically(tmp_path):
+    jax = pytest.importorskip("jax")
+    mx = pytest.importorskip("mlx.core")
+    import numpy as np
+
+    mods = {}
+    for target in ("jax", "mlx"):
+        mod_path = tmp_path / f"gen_parity_{target}.py"
+        mod_path.write_text(compile_source(PARITY_SRC, target=target))
+        spec = importlib.util.spec_from_file_location(f"gen_parity_{target}", mod_path)
+        mods[target] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mods[target])
+
+    def to_mx(t):
+        if isinstance(t, (list, tuple)):
+            return [to_mx(u) for u in t]
+        return mx.array(np.asarray(t))
+
+    params = mods["jax"].init_lm(jax.random.PRNGKey(0))
+    tokens = np.arange(8, dtype=np.int32).reshape(2, 4)
+    logits_jax = np.asarray(mods["jax"].lm(params, jax.numpy.array(tokens)))
+    logits_mlx = np.array(mods["mlx"].lm(to_mx(params), mx.array(tokens)))
+    assert np.allclose(logits_jax, logits_mlx, atol=1e-4)
+
+
 def test_modern_block_runs_under_jax(tmp_path):
     jax = pytest.importorskip("jax")
     src = """
