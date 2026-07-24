@@ -38,6 +38,7 @@ export interface AttentionNode extends BaseNode {
   kind: "attention";
   heads: number;
   causal: boolean;
+  rope: boolean;
 }
 
 export interface ChainNode extends BaseNode {

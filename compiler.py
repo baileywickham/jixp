@@ -36,10 +36,13 @@ valued (#:activation gelu) or bare flags (#:causal).
                                      input: x + params[:seq] over
                                      (..., seq, dim); max-seq bounds the
                                      sequence length the weights support
-    (attention <dim> <heads> #:causal?)
+    (attention <dim> <heads> #:causal? #:rope?)
                                      multi-head self-attention over
                                      (..., seq, dim); the optional #:causal
-                                     flag masks future positions
+                                     flag masks future positions; #:rope
+                                     rotates q/k with rotary position
+                                     embeddings (parameter-free, so no
+                                     max-seq bound)
     (chain <block> <block>...)       sequential composition
     (residual <block>...)            x + body(x); body must preserve dim
     (repeat <count> <block>...)      count copies with independent params;
@@ -105,6 +108,15 @@ def _merge_heads(x):
     x = x.swapaxes(-3, -2)
     *batch, seq, heads, head_dim = x.shape
     return x.reshape(*batch, seq, heads * head_dim)
+''',
+    "rope": '''
+def _rope(x):
+    *_, seq, head_dim = x.shape
+    freqs = 10000.0 ** (-jnp.arange(0, head_dim, 2) / head_dim)
+    angles = jnp.arange(seq)[:, None] * freqs
+    cos, sin = jnp.cos(angles), jnp.sin(angles)
+    x1, x2 = jnp.split(x, 2, axis=-1)
+    return jnp.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1)
 ''',
 }
 
@@ -284,7 +296,7 @@ def {mangled}(params, x):
     if user_dims:
         entries = ", ".join(f'"{k}": {v}' for k, v in user_dims.items())
         parts.append(f"\nDIMS = {{{entries}}}\n")
-    for helper in ("dense", "dense_bias", "attention"):
+    for helper in ("dense", "dense_bias", "attention", "rope"):
         if helper in helpers:
             parts.append(HELPERS[helper])
     parts.extend(defs)
@@ -430,14 +442,16 @@ def _compile_block(name, block, dim_env, registry):
             dim = _resolve_dim(dim_form, dim_env)
             return (*_compile_pos_embedding(name, max_seq, dim), name)
         case ["attention", *args]:
-            positionals, options = _parse_options(args, {"#:causal": "flag"}, "attention")
+            positionals, options = _parse_options(
+                args, {"#:causal": "flag", "#:rope": "flag"}, "attention"
+            )
             match positionals:
                 case [dim_form, heads_form]:
                     pass
                 case _:
                     raise CompileError(
-                        f"attention expects (attention <dim> <heads> #:causal?), "
-                        f"got {args!r}"
+                        f"attention expects (attention <dim> <heads> "
+                        f"#:causal? #:rope?), got {args!r}"
                     )
             dim = _resolve_dim(dim_form, dim_env)
             heads = _resolve_dim(heads_form, dim_env)
@@ -446,7 +460,13 @@ def _compile_block(name, block, dim_env, registry):
                     f"attention dim {dim} is not divisible by heads {heads}"
                 )
             causal = options.get("#:causal", False)
-            return (*_compile_attention(name, dim, heads, causal), name)
+            rope = options.get("#:rope", False)
+            if rope and (dim // heads) % 2:
+                raise CompileError(
+                    f"attention #:rope requires an even head dim, "
+                    f"got {dim} / {heads} = {dim // heads}"
+                )
+            return (*_compile_attention(name, dim, heads, causal, rope), name)
         case ["chain", *blocks] if blocks:
             return _compile_chain(name, blocks, dim_env, registry)
         case ["residual", *blocks] if blocks:
@@ -610,8 +630,9 @@ def {name}(params, x):
     return [defs], node, set()
 
 
-def _compile_attention(name, dim, heads, causal):
+def _compile_attention(name, dim, heads, causal, rope):
     head_dim = dim // heads
+    rotate = "    q, k = _rope(q), _rope(k)\n" if rope else ""
     mask = ""
     if causal:
         mask = '''    seq = x.shape[-2]
@@ -629,15 +650,15 @@ def {name}(params, x):
     q = _split_heads(x @ Wq, {heads})
     k = _split_heads(x @ Wk, {heads})
     v = _split_heads(x @ Wv, {heads})
-    scores = q @ k.swapaxes(-1, -2) / jnp.sqrt({head_dim})
+{rotate}    scores = q @ k.swapaxes(-1, -2) / jnp.sqrt({head_dim})
 {mask}    out = jax.nn.softmax(scores, axis=-1) @ v
     return _merge_heads(out) @ Wo
 '''
     node = {
         "kind": "attention", "in": dim, "out": dim, "heads": heads,
-        "causal": causal, "params": 4 * dim * dim,
+        "causal": causal, "rope": rope, "params": 4 * dim * dim,
     }
-    return [defs], node, {"attention"}
+    return [defs], node, {"attention", "rope"} if rope else {"attention"}
 
 
 def _compile_residual(name, block, dim_env, registry):

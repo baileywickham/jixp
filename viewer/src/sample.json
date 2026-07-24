@@ -9,7 +9,7 @@
           { "kind": "residual", "in": 16, "out": 16, "params": 1120, "children": [
             { "kind": "chain", "in": 16, "out": 16, "params": 1120, "children": [
               { "kind": "layernorm", "in": 16, "out": 16, "params": 32 },
-              { "kind": "attention", "in": 16, "out": 16, "heads": 4, "causal": true, "params": 1024 }
+              { "kind": "attention", "in": 16, "out": 16, "heads": 4, "causal": true, "rope": true, "params": 1024 }
             ] }
           ] },
           { "kind": "residual", "in": 16, "out": 16, "params": 2080, "children": [

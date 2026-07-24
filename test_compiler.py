@@ -289,6 +289,103 @@ def test_attention_helpers_only_emitted_when_used():
     assert "split_heads" not in compile_source("(define m (layernorm 4))")
 
 
+def test_rope_attention_rotates_q_and_k():
+    out = compile_source("(define attn (attention 32 4 #:rope))")
+    assert "def _rope(x):" in out
+    assert "q, k = _rope(q), _rope(k)" in out
+    compile(out, "<generated>", "exec")
+
+
+def test_non_rope_attention_has_no_rope_helper():
+    assert "_rope" not in compile_source("(define attn (attention 32 4))")
+
+
+def test_rope_requires_even_head_dim():
+    with pytest.raises(CompileError, match="even head dim"):
+        compile_source("(define attn (attention 12 4 #:rope))")
+    compile_source("(define attn (attention 12 4))")
+
+
+def test_summary_attention_rope_flag():
+    node = model_summary(
+        "(define attn (attention 32 4 #:causal #:rope))"
+    )["defines"][0]["node"]
+    assert node["rope"] is True and node["causal"] is True
+    node = model_summary("(define attn (attention 32 4))")["defines"][0]["node"]
+    assert node["rope"] is False
+
+
+def _load_generated(tmp_path, src, name):
+    import importlib.util
+
+    mod_path = tmp_path / f"{name}.py"
+    mod_path.write_text(compile_source(src))
+    spec = importlib.util.spec_from_file_location(name, mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_rope_rotation_matches_reference(tmp_path):
+    jax = pytest.importorskip("jax")
+    import math
+
+    import numpy as np
+
+    mod = _load_generated(
+        tmp_path, "(define attn (attention 16 4 #:rope))", "gen_rope_ref"
+    )
+    x = np.asarray(
+        jax.random.normal(jax.random.PRNGKey(0), (2, 4, 6, 8))
+    )  # (batch, heads, seq, head_dim)
+    expected = np.empty_like(x)
+    seq, hd = x.shape[-2], x.shape[-1]
+    for pos in range(seq):
+        for i in range(hd // 2):
+            theta = pos * 10000.0 ** (-2 * i / hd)
+            a, b = x[..., pos, i], x[..., pos, i + hd // 2]
+            expected[..., pos, i] = a * math.cos(theta) - b * math.sin(theta)
+            expected[..., pos, i + hd // 2] = a * math.sin(theta) + b * math.cos(theta)
+    actual = np.asarray(mod._rope(jax.numpy.array(x)))
+    assert np.allclose(actual, expected, atol=1e-5)
+
+
+def test_rope_attention_is_position_sensitive(tmp_path):
+    # Without rope, non-causal attention is permutation-equivariant, so
+    # reversing the input sequence exactly reverses the output; rope breaks
+    # that symmetry.
+    jax = pytest.importorskip("jax")
+
+    plain = _load_generated(
+        tmp_path, "(define attn (attention 8 2))", "gen_perm_plain"
+    )
+    roped = _load_generated(
+        tmp_path, "(define attn (attention 8 2 #:rope))", "gen_perm_rope"
+    )
+    params = plain.init_attn(jax.random.PRNGKey(0))
+    x = jax.random.normal(jax.random.PRNGKey(1), (5, 8))
+    assert jax.numpy.allclose(
+        plain.attn(params, x[::-1]), plain.attn(params, x)[::-1], atol=1e-5
+    )
+    assert not jax.numpy.allclose(
+        roped.attn(params, x[::-1]), roped.attn(params, x)[::-1], atol=1e-5
+    )
+
+
+def test_causal_rope_attention_ignores_future_positions(tmp_path):
+    jax = pytest.importorskip("jax")
+
+    mod = _load_generated(
+        tmp_path, "(define attn (attention 8 2 #:causal #:rope))", "gen_causal_rope"
+    )
+    params = mod.init_attn(jax.random.PRNGKey(0))
+    x = jax.random.normal(jax.random.PRNGKey(1), (5, 8))
+    y = mod.attn(params, x)
+    y_perturbed = mod.attn(params, x.at[-1].add(1.0))
+    assert jax.numpy.allclose(y[:-1], y_perturbed[:-1], atol=1e-6)
+    assert not jax.numpy.allclose(y[-1], y_perturbed[-1])
+
+
 def test_residual_adds_input():
     out = compile_source("(define r (residual (layernorm 16)))")
     assert "def _r_inner(params, x):" in out
@@ -805,6 +902,13 @@ def test_mlx_causal_mask():
     assert "mx.where(mask, scores, -mx.inf)" in out
 
 
+def test_mlx_rope():
+    out = compile_source("(define attn (attention 32 4 #:rope))", target="mlx")
+    assert "mx.split(x, 2, axis=-1)" in out
+    assert "mx.concatenate" in out
+    compile(out, "<generated>", "exec")
+
+
 def test_mlx_embedding_and_pos_embedding():
     out = compile_source(
         "(define m (chain (embedding 100 32) (pos-embedding 64 32)))", target="mlx"
@@ -840,7 +944,7 @@ PARITY_SRC = """
 (define lm (chain
   (embedding vocab d)
   (pos-embedding block-size d)
-  (residual (layernorm d) (attention d 4 #:causal))
+  (residual (layernorm d) (attention d 4 #:causal #:rope))
   (residual (rmsnorm d) (mlp d [4d] d #:bias))
   (layernorm d)
   (mlp d [] vocab)))

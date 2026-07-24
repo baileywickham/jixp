@@ -21,7 +21,7 @@ function label(n: ModelNode): string {
     case "layernorm": return `layernorm d=${n.out}`;
     case "rmsnorm": return `rmsnorm d=${n.out}${n.scale ? "" : " · no scale"}`;
     case "embedding": return `embedding vocab=${n.vocab} → d=${n.out}`;
-    case "attention": return `attention d=${n.out} · heads=${n.heads}${n.causal ? " · causal" : ""}`;
+    case "attention": return `attention d=${n.out} · heads=${n.heads}${n.causal ? " · causal" : ""}${n.rope ? " · rope" : ""}`;
     default: return n.kind;
   }
 }

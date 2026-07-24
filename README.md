@@ -181,7 +181,7 @@ Blocks:
 | `(rmsnorm dim #:no-scale?)` | RMS normalization with learnable scale; `#:no-scale` makes it parameter-free |
 | `(embedding vocab dim)` | lookup table: int token ids `(..., seq)` → `(..., seq, dim)`; only valid at the start of a model |
 | `(pos-embedding max-seq dim)` | learned positional table added to the input: `x + params[:seq]`; `max-seq` bounds the sequence length the weights support |
-| `(attention dim heads #:causal?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions |
+| `(attention dim heads #:causal? #:rope?)` | multi-head self-attention over `(..., seq, dim)`; `#:causal` masks future positions; `#:rope` rotates q/k with rotary position embeddings (parameter-free, no max-seq bound — an alternative to `pos-embedding`) |
 | `(chain block...)` | sequential composition |
 | `(residual block...)` | `x + body(x)`; body must preserve dim |
 | `(repeat count block...)` | `count` copies with independent params; body must preserve dim |

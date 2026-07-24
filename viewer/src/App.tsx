@@ -71,6 +71,7 @@ function Detail({ n }: { n: ModelNode }) {
         <>
           <span className={dims}>d={n.out} · heads={n.heads}</span>
           {n.causal ? " · causal" : ""}
+          {n.rope ? " · rope" : ""}
         </>
       );
     case "chain":
